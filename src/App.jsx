@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { supabase } from './supabase';
+import { generateSearchQueries } from './services/api';
 
 const FUNCTION_URL = import.meta.env.VITE_SUPABASE_FUNCTION_URL;
 
@@ -373,13 +374,19 @@ const App = () => {
         await saveMessage(currentThreadId, 'user', searchQuery);
       }
 
-      setSearchStatus('Connecting to Monolith Edge...');
+      setSearchStatus('Generating search paths...');
+      const queryCount = isDeepResearch ? 5 : 3;
+      const frontQueries = await generateSearchQueries(searchQuery, queryCount);
+      setGeneratedQueries(frontQueries);
+
+      setSearchStatus(`Searching ${frontQueries.length} paths...`);
 
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
       const { data, error } = await supabase.functions.invoke('monolith-chat', {
         body: {
           query: searchQuery,
+          queries: frontQueries,
           history: messages.map(m => ({ role: m.role, content: m.content })),
           deep: isDeepResearch,
           space_id: activeSpaceId,
