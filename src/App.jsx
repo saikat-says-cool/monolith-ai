@@ -384,39 +384,93 @@ const App = () => {
       setSearchStatus('Planning strategy...');
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
-      const { data, error } = await supabase.functions.invoke('monolith-chat', {
-        body: {
+      // Using Fetch directly for Streaming support
+      const response = await fetch(`${FUNCTION_URL}/monolith-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabase.supabaseKey}` // Using the key from the client
+        },
+        body: JSON.stringify({
           query: searchQuery,
           queries: frontQueries,
           history: messages.map(m => ({ role: m.role, content: m.content })),
           deep: isDeepResearch,
           space_id: activeSpaceId,
-          custom_prompt: currentSpace?.system_prompt
-        }
+          custom_prompt: currentSpace?.system_prompt,
+          stream: true
+        })
       });
 
-      if (error) throw error;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch');
+      }
 
-      setMessages(prev => prev.map(msg => {
-        if (msg.id === tempAiMsgId) {
-          return {
-            role: 'assistant',
-            content: data.answer,
-            id: 'ai-' + Date.now(),
-            search_results: data.sources,
-            all_sources: data.all_sources,
-            search_queries: data.search_queries,
-            isLoading: false
-          };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedAnswer = '';
+      let metadataReceived = false;
+      let finalData = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+
+        // Handle metadata chunk (delimited by our custom marker)
+        if (!metadataReceived && chunk.includes('---\n\n')) {
+          const parts = chunk.split('---\n\n');
+          try {
+            const metaStr = parts[0].trim();
+            finalData = JSON.parse(metaStr);
+            metadataReceived = true;
+
+            // Initial update with metadata (sources)
+            setMessages(prev => prev.map(msg => {
+              if (msg.id === tempAiMsgId) {
+                return {
+                  ...msg,
+                  search_results: finalData.sources,
+                  all_sources: finalData.all_sources,
+                  search_queries: finalData.search_queries,
+                  isLoading: false
+                };
+              }
+              return msg;
+            }));
+
+            // Handle the remaining part of the chunk as content
+            if (parts[1]) {
+              accumulatedAnswer += parts[1];
+              setMessages(prev => prev.map(msg => {
+                if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
+                return msg;
+              }));
+            }
+          } catch (e) {
+            console.error("Failed to parse metadata", e);
+          }
+          continue;
         }
-        return msg;
-      }));
 
-      await saveMessage(currentThreadId, 'assistant', data.answer, data.sources);
+        if (metadataReceived) {
+          accumulatedAnswer += chunk;
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
+            return msg;
+          }));
+        }
+      }
 
-      if (isNewThread) {
-        const smartTitle = await generateSmartTitle(searchQuery, data.answer);
-        await updateThreadTitle(currentThreadId, smartTitle);
+      // Final persistence
+      if (finalData) {
+        await saveMessage(currentThreadId, 'assistant', accumulatedAnswer, finalData.sources);
+        if (isNewThread) {
+          const smartTitle = await generateSmartTitle(searchQuery, accumulatedAnswer);
+          await updateThreadTitle(currentThreadId, smartTitle);
+        }
       }
 
     } catch (err) {
@@ -425,7 +479,7 @@ const App = () => {
         if (msg.id === tempAiMsgId) {
           return {
             role: 'assistant',
-            content: `Error: ${err.message || 'The search engine is currently unavailable. Please check your Supabase Edge Function logs.'}`,
+            content: `Error: ${err.message || 'The search engine is currently unavailable.'}`,
             id: 'error-' + Date.now(),
             isLoading: false
           };

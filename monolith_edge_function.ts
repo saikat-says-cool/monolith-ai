@@ -45,7 +45,6 @@ serve(async (req) => {
             console.log(`[Monolith] Internal web request authorized.`)
         }
 
-        console.log(`[Monolith API] Authorized request from key: ${keyRecord.name}`)
 
         const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = await req.json()
 
@@ -67,16 +66,22 @@ serve(async (req) => {
                 try {
                     return await requestFn(keys[keyIndex]);
                 } catch (error) {
-                    if (error.status === 429 || error.status === 402) {
-                        console.warn(`Key index ${keyIndex} rate limited (Status: ${error.status}), rotating...`);
+                    const status = error.status || 0;
+                    // Rotate on: Key Issues (401, 403), Provider Issues (5xx, 429, 402), or Network/Crash (0)
+                    const shouldRotate = status >= 500 || status === 0 || [401, 402, 403, 429].includes(status);
+
+                    if (shouldRotate) {
+                        console.warn(`[Safety Net] Key index ${keyIndex} failed (Status: ${status}). Rotating to next key...`);
                         attempts++;
-                        if (attempts < keys.length) await sleep(1000);
-                        continue;
+                        if (attempts < keys.length) {
+                            await sleep(status === 429 ? 1200 : 300); // Paced delay
+                            continue;
+                        }
                     }
-                    throw error;
+                    throw error; // If it's a 400 (Client error) or all keys failed, throw
                 }
             }
-            throw new Error(`All ${keys.length} API keys for this service are exhausted.`);
+            throw new Error(`Monolith Safety Net: Exhausted ${keys.length} keys or provider is globally down.`);
         }
 
         // 2. Search Planning
@@ -119,7 +124,11 @@ serve(async (req) => {
                         response_format: { type: "json_object" }
                     })
                 });
-                if (!resp.ok) throw { status: resp.status };
+                if (!resp.ok) {
+                    const errBody = await resp.text();
+                    console.error(`[Monolith] API Error (Status: ${resp.status}):`, errBody);
+                    throw { status: resp.status, message: errBody };
+                }
                 const data = await resp.json();
                 return JSON.parse(data.choices[0].message.content.trim());
             });
@@ -154,7 +163,10 @@ serve(async (req) => {
                             headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                             body: JSON.stringify({ query: q, summary: true, count: searchStrategy.count_per_call, freshness: 'hour' })
                         });
-                        if (!resp.ok) throw { status: resp.status };
+                        if (!resp.ok) {
+                            const errBody = await resp.text();
+                            throw { status: resp.status, message: `Search(Hour) Error: ${errBody}` };
+                        }
                         const data = await resp.json();
                         return data.data?.webPages?.value || [];
                     }, qIndex);
@@ -170,7 +182,10 @@ serve(async (req) => {
                         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query: q, summary: true, count: searchStrategy.count_per_call, freshness: 'day' })
                     });
-                    if (!resp.ok) throw { status: resp.status };
+                    if (!resp.ok) {
+                        const errBody = await resp.text();
+                        throw { status: resp.status, message: `Search(Day) Error: ${errBody}` };
+                    }
                     const data = await resp.json();
                     return data.data?.webPages?.value || [];
                 }, qIndex + generatedQueries.length);
@@ -215,7 +230,10 @@ serve(async (req) => {
                         return_documents: false
                     })
                 });
-                if (!resp.ok) throw { status: resp.status };
+                if (!resp.ok) {
+                    const errBody = await resp.text();
+                    throw { status: resp.status, message: `Rerank Error: ${errBody}` };
+                }
                 const data = await resp.json();
                 return data.results.map(r => ({ ...chunk[r.index], relevance_score: r.relevance_score }));
             }, idx));
@@ -233,7 +251,7 @@ serve(async (req) => {
             return `[SOURCE ${i + 1}] Title: ${c.name}\nContent: ${content}`;
         }).join('\n\n');
 
-        const basePrompt = `You are Monolith AI, a highly intelligent and conversational research assistant. 
+        const basePrompt = `You are Monolith AI, a highly intelligent and conversational research assistant.
 Use the provided sources to answer the query: "${searchQuery}"
 
 ${searchStrategy.conversational_tone ?
@@ -246,7 +264,44 @@ ${contextText}`;
 
         const finalSystemPrompt = custom_prompt ? `USER RULES: ${custom_prompt}\n\n${basePrompt}` : basePrompt;
 
-        const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
+        const { stream: shouldStream } = await req.json().catch(() => ({ stream: false }));
+
+        if (!shouldStream) {
+            const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
+                const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'LongCat-Flash-Chat',
+                        messages: [
+                            { role: 'system', content: finalSystemPrompt },
+                            ...history,
+                            { role: 'user', content: searchQuery }
+                        ],
+                        max_tokens: deep ? 3000 : 1500,
+                        temperature: 0.7
+                    })
+                });
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw { status: resp.status, message: `Synthesis Error: ${errText}` };
+                }
+                const data = await resp.json();
+                return data.choices[0].message.content;
+            });
+
+            return new Response(JSON.stringify({
+                answer: aiResponse,
+                sources: reranked.slice(0, contextLimit),
+                all_sources: allResults,
+                search_queries: generatedQueries
+            }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+        }
+
+        // --- STREAMING MODE ---
+        const longCatResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
             const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -258,31 +313,81 @@ ${contextText}`;
                         { role: 'user', content: searchQuery }
                     ],
                     max_tokens: deep ? 3000 : 1500,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    stream: true
                 })
             });
             if (!resp.ok) {
                 const errText = await resp.text();
-                throw { status: resp.status, message: errText };
+                throw { status: resp.status, message: `Streaming Synthesis Error: ${errText}` };
             }
-            const data = await resp.json();
-            return data.choices[0].message.content;
+            return resp;
         });
 
-        return new Response(JSON.stringify({
-            answer: aiResponse,
-            sources: reranked.slice(0, contextLimit),
-            all_sources: allResults,
-            search_queries: generatedQueries
-        }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+
+        const readableStream = new ReadableStream({
+            async start(controller) {
+                // 1. Send Metadata (Sources, Queries)
+                const metadata = {
+                    type: 'metadata',
+                    sources: reranked.slice(0, contextLimit),
+                    all_sources: allResults,
+                    search_queries: generatedQueries
+                };
+                controller.enqueue(encoder.encode(JSON.stringify(metadata) + '\n\n---\n\n'));
+
+                // 2. Pipe LongCat Stream
+                const reader = longCatResponse.body?.getReader();
+                if (!reader) {
+                    controller.close();
+                    return;
+                }
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const data = line.slice(6).trim();
+                                if (data === '[DONE]') break;
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    const content = parsed.choices[0]?.delta?.content;
+                                    if (content) {
+                                        controller.enqueue(encoder.encode(content));
+                                    }
+                                } catch (e) {
+                                    // Skip malformed chunks
+                                }
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error("[Monolith Stream Error]", err);
+                    controller.enqueue(encoder.encode("\n\n[Stream Interrupted]"));
+                } finally {
+                    reader.releaseLock();
+                    controller.close();
+                }
+            }
+        });
+
+        return new Response(readableStream, {
+            headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' }
         });
 
     } catch (err) {
         console.error("Monolith Edge Error:", err);
+        const errorMessage = typeof err === 'string' ? err : (err.message || "Internal Server Error");
         return new Response(JSON.stringify({
-            error: err.message || "Internal Server Error",
-            details: err.status === 413 ? "Payload too large for synthesis." : err.toString()
+            error: errorMessage,
+            details: err.status ? `API Status ${err.status}` : err.toString()
         }), {
             status: 500,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }

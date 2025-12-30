@@ -33,59 +33,41 @@ The primary endpoint for generating research-backed answers.
 | `history` | `array` | No | List of previous message objects `[{role: "user", content: "..."}, {role: "assistant", content: "..."}]` for contextual follow-ups. |
 | `custom_prompt` | `string` | No | Additional system-level instructions to steer the AI's behavior or persona. |
 | `queries` | `array` | No | Pre-generated search strings to skip the "Planning" phase and force specific search paths. |
+| `stream` | `boolean` | No | Set to `true` to receive a streaming response (text/event-stream). Defaults to `false`. |
 
 ### 📤 Response Format
 
+#### Standard (stream: false)
 ```json
 {
   "answer": "The refined, researched answer synthesized from multiple sources...",
-  "sources": [
-    {
-      "name": "Source Title",
-      "url": "https://example.com/article",
-      "snippet": "Exerpt from the article...",
-      "relevance_score": 0.95
-    }
-  ],
+  "sources": [...],
   "all_sources": [...],
-  "search_queries": ["query path 1", "query path 2"]
+  "search_queries": ["query path 1", ... ]
 }
 ```
+
+#### Streaming (stream: true)
+The endpoint returns a `text/event-stream`.
+1.  **First Chunk**: A JSON object containing metadata (`type: "metadata"`, `sources`, `all_sources`, `search_queries`) followed by a delimiter `---\n\n`.
+2.  **Subsequent Chunks**: Raw text tokens of the answer.
 
 ---
 
 ## 🛠️ Code Examples
 
-### cURL (Bash)
+### cURL (Streaming)
 ```bash
 curl -X POST https://fvparsgobgmggcioyxhi.supabase.co/functions/v1/monolith-chat \
   -H "Authorization: Bearer YOUR_PK_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "Who is the current CEO of Tesla?",
-    "deep": false
+    "stream": true
   }'
 ```
 
-### Python
-```python
-import requests
-
-url = "https://fvparsgobgmggcioyxhi.supabase.co/functions/v1/monolith-chat"
-headers = {
-    "Authorization": "Bearer YOUR_PK_KEY",
-    "Content-Type": "application/json"
-}
-payload = {
-    "query": "Analysis of current trends in generative AI",
-    "deep": True
-}
-
-response = requests.post(url, json=payload, headers=headers)
-print(response.json()['answer'])
-```
-
-### JavaScript (Node.js/Fetch)
+### JavaScript (Streaming Example)
 ```javascript
 const response = await fetch('https://fvparsgobgmggcioyxhi.supabase.co/functions/v1/monolith-chat', {
   method: 'POST',
@@ -95,12 +77,18 @@ const response = await fetch('https://fvparsgobgmggcioyxhi.supabase.co/functions
   },
   body: JSON.stringify({
     query: "Latest news on SpaceX Starship",
-    deep: false
+    stream: true
   })
 });
 
-const data = await response.json();
-console.log(data.answer);
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  console.log(decoder.decode(value));
+}
 ```
 
 ---
