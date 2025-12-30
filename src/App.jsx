@@ -381,39 +381,21 @@ const App = () => {
 
       setSearchStatus(`Searching ${frontQueries.length} paths...`);
 
-      // 1. Get a valid API Key for the frontend to authenticate itself
-      const { data: keys } = await supabase.from('api_keys').select('key').limit(1);
-      const activeKey = keys && keys.length > 0 ? keys[0].key : null;
-
-      if (!activeKey) {
-        throw new Error("No API Key found. Please create one in API Settings first.");
-      }
-
       setSearchStatus('Planning strategy...');
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
-      const response = await fetch(`${FUNCTION_URL}/monolith-chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${activeKey}`
-        },
-        body: JSON.stringify({
+      const { data, error } = await supabase.functions.invoke('monolith-chat', {
+        body: {
           query: searchQuery,
           queries: frontQueries,
           history: messages.map(m => ({ role: m.role, content: m.content })),
           deep: isDeepResearch,
           space_id: activeSpaceId,
           custom_prompt: currentSpace?.system_prompt
-        })
+        }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
+      if (error) throw error;
 
       setMessages(prev => prev.map(msg => {
         if (msg.id === tempAiMsgId) {

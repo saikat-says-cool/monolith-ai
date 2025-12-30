@@ -15,35 +15,34 @@ serve(async (req) => {
     }
 
     try {
-        // 0. API KEY AUTHENTICATION
+        // 0. AUTHENTICATION (Internal vs External)
         const authHeader = req.headers.get('Authorization')
         const providedKey = authHeader?.replace('Bearer ', '').trim()
+        const isExternal = providedKey?.startsWith('pk-')
 
-        if (!providedKey) {
-            return new Response(JSON.stringify({ error: "No API Key provided. Please include 'Authorization: Bearer pk-xxx'" }), {
-                status: 401,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            })
-        }
+        if (isExternal) {
+            // Initialize Supabase Client for Key Validation
+            const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2")
+            const supabaseAdmin = createClient(
+                Deno.env.get('SUPABASE_URL') ?? '',
+                Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+            )
 
-        // Initialize Supabase Client for Internal Auth Check
-        const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2")
-        const supabaseAdmin = createClient(
-            Deno.env.get('SUPABASE_URL') ?? '',
-            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-        )
+            const { data: keyRecord, error: keyError } = await supabaseAdmin
+                .from('api_keys')
+                .select('*')
+                .eq('key', providedKey)
+                .single()
 
-        const { data: keyRecord, error: keyError } = await supabaseAdmin
-            .from('api_keys')
-            .select('*')
-            .eq('key', providedKey)
-            .single()
-
-        if (keyError || !keyRecord) {
-            return new Response(JSON.stringify({ error: "Invalid or expired API Key." }), {
-                status: 403,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            })
+            if (keyError || !keyRecord) {
+                return new Response(JSON.stringify({ error: "Invalid or expired API Key." }), {
+                    status: 403,
+                    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+                })
+            }
+            console.log(`[Monolith API] External request authorized via key: ${keyRecord.name}`)
+        } else {
+            console.log(`[Monolith] Internal web request authorized.`)
         }
 
         console.log(`[Monolith API] Authorized request from key: ${keyRecord.name}`)
