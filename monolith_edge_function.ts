@@ -15,14 +15,40 @@ serve(async (req) => {
     }
 
     try {
-        const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = await req.json()
+        // 0. API KEY AUTHENTICATION
+        const authHeader = req.headers.get('Authorization')
+        const providedKey = authHeader?.replace('Bearer ', '').trim()
 
-        if (!searchQuery) {
-            return new Response(JSON.stringify({ error: "Query is required" }), {
-                status: 400,
+        if (!providedKey) {
+            return new Response(JSON.stringify({ error: "No API Key provided. Please include 'Authorization: Bearer pk-xxx'" }), {
+                status: 401,
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             })
         }
+
+        // Initialize Supabase Client for Internal Auth Check
+        const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2")
+        const supabaseAdmin = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        )
+
+        const { data: keyRecord, error: keyError } = await supabaseAdmin
+            .from('api_keys')
+            .select('*')
+            .eq('key', providedKey)
+            .single()
+
+        if (keyError || !keyRecord) {
+            return new Response(JSON.stringify({ error: "Invalid or expired API Key." }), {
+                status: 403,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            })
+        }
+
+        console.log(`[Monolith API] Authorized request from key: ${keyRecord.name}`)
+
+        const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = await req.json()
 
         // 1. Setup API Keys
         const LANGSEARCH_KEYS = Deno.env.get('LANGSEARCH_KEYS')?.split(',').map(k => k.trim()).filter(Boolean) || []
