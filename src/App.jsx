@@ -384,99 +384,39 @@ const App = () => {
       setSearchStatus('Planning strategy...');
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
-      // Using Fetch directly for Streaming support
-      const response = await fetch(`${FUNCTION_URL}/monolith-chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-        },
-        body: JSON.stringify({
+      const { data, error } = await supabase.functions.invoke('monolith-chat', {
+        body: {
           query: searchQuery,
           queries: frontQueries,
           history: messages.map(m => ({ role: m.role, content: m.content })),
           deep: isDeepResearch,
           space_id: activeSpaceId,
-          custom_prompt: currentSpace?.system_prompt,
-          stream: true
-        })
+          custom_prompt: currentSpace?.system_prompt
+        }
       });
 
-      if (!response.ok) {
-        let errorMsg = 'Failed to fetch';
-        try {
-          const errorData = await response.json();
-          errorMsg = errorData.error || errorMsg;
-        } catch (e) {
-          errorMsg = await response.text();
+      if (error) throw error;
+
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === tempAiMsgId) {
+          return {
+            role: 'assistant',
+            content: data.answer,
+            id: 'ai-' + Date.now(),
+            search_results: data.sources,
+            all_sources: data.all_sources,
+            search_queries: data.search_queries,
+            isLoading: false
+          };
         }
-        throw new Error(errorMsg);
-      }
+        return msg;
+      }));
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulatedAnswer = '';
-      let metadataReceived = false;
-      let finalData = null;
-      let buffer = '';
+      await saveMessage(currentThreadId, 'assistant', data.answer, data.sources);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-
-        if (!metadataReceived) {
-          buffer += chunk;
-          if (buffer.includes('---\n\n')) {
-            const parts = buffer.split('---\n\n');
-            try {
-              const metaStr = parts[0].trim();
-              finalData = JSON.parse(metaStr);
-              metadataReceived = true;
-
-              setMessages(prev => prev.map(msg => {
-                if (msg.id === tempAiMsgId) {
-                  return {
-                    ...msg,
-                    search_results: finalData.sources,
-                    all_sources: finalData.all_sources,
-                    search_queries: finalData.search_queries,
-                    isLoading: false
-                  };
-                }
-                return msg;
-              }));
-
-              const preContent = parts.slice(1).join('---\n\n');
-              if (preContent) {
-                accumulatedAnswer += preContent;
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
-                  return msg;
-                }));
-              }
-              buffer = '';
-            } catch (e) {
-              console.error("Waiting for more metadata...", e);
-            }
-          }
-        } else {
-          accumulatedAnswer += chunk;
-          setMessages(prev => prev.map(msg => {
-            if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
-            return msg;
-          }));
-        }
-      }
-
-      // Final persistence
-      if (finalData) {
-        await saveMessage(currentThreadId, 'assistant', accumulatedAnswer, finalData.sources);
-        if (isNewThread) {
-          const smartTitle = await generateSmartTitle(searchQuery, accumulatedAnswer);
-          await updateThreadTitle(currentThreadId, smartTitle);
-        }
+      if (isNewThread) {
+        const smartTitle = await generateSmartTitle(searchQuery, data.answer);
+        await updateThreadTitle(currentThreadId, smartTitle);
       }
 
     } catch (err) {

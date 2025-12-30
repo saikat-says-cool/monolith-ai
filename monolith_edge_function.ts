@@ -46,7 +46,8 @@ serve(async (req) => {
         }
 
 
-        const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = await req.json()
+        const body = await req.json();
+        const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = body;
 
         // 1. Setup API Keys
         const LANGSEARCH_KEYS = Deno.env.get('LANGSEARCH_KEYS')?.split(',').map(k => k.trim()).filter(Boolean) || []
@@ -120,7 +121,7 @@ serve(async (req) => {
                             },
                             { role: 'user', content: searchQuery }
                         ],
-                        temperature: 0.2,
+                        temperature: 0.1,
                         response_format: { type: "json_object" }
                     })
                 });
@@ -130,7 +131,10 @@ serve(async (req) => {
                     throw { status: resp.status, message: errBody };
                 }
                 const data = await resp.json();
-                return JSON.parse(data.choices[0].message.content.trim());
+                let content = data.choices[0].message.content.trim();
+                // Safety clean
+                if (content.includes('```')) content = content.replace(/```json|```/g, '').trim();
+                return JSON.parse(content);
             });
 
             generatedQueries = plannerResponse.queries;
@@ -264,44 +268,7 @@ ${contextText}`;
 
         const finalSystemPrompt = custom_prompt ? `USER RULES: ${custom_prompt}\n\n${basePrompt}` : basePrompt;
 
-        const { stream: shouldStream } = await req.json().catch(() => ({ stream: false }));
-
-        if (!shouldStream) {
-            const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
-                const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'LongCat-Flash-Chat',
-                        messages: [
-                            { role: 'system', content: finalSystemPrompt },
-                            ...history,
-                            { role: 'user', content: searchQuery }
-                        ],
-                        max_tokens: deep ? 3000 : 1500,
-                        temperature: 0.7
-                    })
-                });
-                if (!resp.ok) {
-                    const errText = await resp.text();
-                    throw { status: resp.status, message: `Synthesis Error: ${errText}` };
-                }
-                const data = await resp.json();
-                return data.choices[0].message.content;
-            });
-
-            return new Response(JSON.stringify({
-                answer: aiResponse,
-                sources: reranked.slice(0, contextLimit),
-                all_sources: allResults,
-                search_queries: generatedQueries
-            }), {
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
-        }
-
-        // --- STREAMING MODE ---
-        const longCatResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
+        const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
             const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -313,73 +280,24 @@ ${contextText}`;
                         { role: 'user', content: searchQuery }
                     ],
                     max_tokens: deep ? 3000 : 1500,
-                    temperature: 0.7,
-                    stream: true
+                    temperature: 0.7
                 })
             });
             if (!resp.ok) {
                 const errText = await resp.text();
-                throw { status: resp.status, message: `Streaming Synthesis Error: ${errText}` };
+                throw { status: resp.status, message: `Synthesis Error: ${errText}` };
             }
-            return resp;
+            const data = await resp.json();
+            return data.choices[0].message.content;
         });
 
-        const encoder = new TextEncoder();
-        const decoder = new TextDecoder();
-
-        const readableStream = new ReadableStream({
-            async start(controller) {
-                // 1. Send Metadata (Sources, Queries)
-                const metadata = {
-                    type: 'metadata',
-                    sources: reranked.slice(0, contextLimit),
-                    all_sources: allResults,
-                    search_queries: generatedQueries
-                };
-                controller.enqueue(encoder.encode(JSON.stringify(metadata) + '\n\n---\n\n'));
-
-                // 2. Pipe LongCat Stream
-                const reader = longCatResponse.body?.getReader();
-                if (!reader) {
-                    controller.close();
-                    return;
-                }
-
-                try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        const chunk = decoder.decode(value);
-                        const lines = chunk.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const data = line.slice(6).trim();
-                                if (data === '[DONE]') break;
-                                try {
-                                    const parsed = JSON.parse(data);
-                                    const content = parsed.choices[0]?.delta?.content;
-                                    if (content) {
-                                        controller.enqueue(encoder.encode(content));
-                                    }
-                                } catch (e) {
-                                    // Skip malformed chunks
-                                }
-                            }
-                        }
-                    }
-                } catch (err) {
-                    console.error("[Monolith Stream Error]", err);
-                    controller.enqueue(encoder.encode("\n\n[Stream Interrupted]"));
-                } finally {
-                    reader.releaseLock();
-                    controller.close();
-                }
-            }
-        });
-
-        return new Response(readableStream, {
-            headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' }
+        return new Response(JSON.stringify({
+            answer: aiResponse,
+            sources: reranked.slice(0, contextLimit),
+            all_sources: allResults,
+            search_queries: generatedQueries
+        }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
 
     } catch (err) {

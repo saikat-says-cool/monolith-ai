@@ -175,8 +175,7 @@ USER QUESTION: ${userQuery}`;
                 ],
                 stream: false,
                 max_tokens: 512,
-                temperature: 0.1, // Lower temperature for more consistent JSON
-                response_format: { type: "json_object" } // Force JSON mode
+                temperature: 0.3
             }, {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
@@ -185,24 +184,8 @@ USER QUESTION: ${userQuery}`;
             })
         );
 
-        let content = response.data.choices[0].message.content.trim();
-
-        // Clean up markdown code blocks if present
-        if (content.includes('```')) {
-            content = content.replace(/```json|```/g, '').trim();
-        }
-
-        let queries = [];
-        try {
-            const parsed = JSON.parse(content);
-            // The model might return { "queries": [...] } or just [...]
-            queries = Array.isArray(parsed) ? parsed : (parsed.queries || []);
-        } catch (e) {
-            // Last ditch effort: regex for array
-            const match = content.match(/\[.*\]/s);
-            if (match) queries = JSON.parse(match[0]);
-            else throw e;
-        }
+        const content = response.data.choices[0].message.content.trim();
+        const queries = JSON.parse(content);
 
         // Always include the original query
         if (!queries.includes(userQuery)) {

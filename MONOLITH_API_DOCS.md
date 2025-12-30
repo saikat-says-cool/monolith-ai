@@ -1,4 +1,4 @@
-# 🗿 Monolith API Documentation
+# 🗿 Monolith Engine API Documentation
 
 Welcome to the Monolith Engine API. This documentation provides everything you need to integrate Monolith's high-intelligence search and research capabilities into your own applications, automation workflows (n8n, Make.com), or custom bots.
 
@@ -33,62 +33,38 @@ The primary endpoint for generating research-backed answers.
 | `history` | `array` | No | List of previous message objects `[{role: "user", content: "..."}, {role: "assistant", content: "..."}]` for contextual follow-ups. |
 | `custom_prompt` | `string` | No | Additional system-level instructions to steer the AI's behavior or persona. |
 | `queries` | `array` | No | Pre-generated search strings to skip the "Planning" phase and force specific search paths. |
-| `stream` | `boolean` | No | Set to `true` to receive a streaming response (text/event-stream). Defaults to `false`. |
 
 ### 📤 Response Format
 
-#### Standard (stream: false)
 ```json
 {
   "answer": "The refined, researched answer synthesized from multiple sources...",
-  "sources": [...],
+  "sources": [
+    {
+      "name": "Source Title",
+      "url": "https://example.com/article",
+      "snippet": "Exerpt from the article...",
+      "relevance_score": 0.95
+    }
+  ],
   "all_sources": [...],
-  "search_queries": ["query path 1", ... ]
+  "search_queries": ["query path 1", "query path 2"]
 }
 ```
-
-#### Streaming (stream: true)
-The endpoint returns a `text/event-stream`.
-1.  **First Chunk**: A JSON object containing metadata (`type: "metadata"`, `sources`, `all_sources`, `search_queries`) followed by a delimiter `---\n\n`.
-2.  **Subsequent Chunks**: Raw text tokens of the answer.
 
 ---
 
 ## 🛠️ Code Examples
 
-### cURL (Streaming)
+### cURL (Bash)
 ```bash
 curl -X POST https://fvparsgobgmggcioyxhi.supabase.co/functions/v1/monolith-chat \
   -H "Authorization: Bearer YOUR_PK_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "query": "Who is the current CEO of Tesla?",
-    "stream": true
+    "deep": false
   }'
-```
-
-### JavaScript (Streaming Example)
-```javascript
-const response = await fetch('https://fvparsgobgmggcioyxhi.supabase.co/functions/v1/monolith-chat', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer YOUR_PK_KEY',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    query: "Latest news on SpaceX Starship",
-    stream: true
-  })
-});
-
-const reader = response.body.getReader();
-const decoder = new TextDecoder();
-
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  console.log(decoder.decode(value));
-}
 ```
 
 ---
