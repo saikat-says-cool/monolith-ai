@@ -14,7 +14,7 @@ const App = () => {
   const [threads, setThreads] = useState([]);
   const [activeThreadId, setActiveThreadId] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 768);
   // const skipFetchRef = useRef(false); // Deprecated: handling state more explicitly now
 
   // Theme State
@@ -568,10 +568,23 @@ const App = () => {
           <Menu size={20} />
         </button>
         <div className="mobile-brand">monolith</div>
-        <button onClick={() => setActiveThreadId(null)} className="mobile-new-chat">
+        <button onClick={() => { setActiveThreadId(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className="mobile-new-chat">
           <Plus size={20} />
         </button>
       </div>
+
+      {/* Mobile Backdrop Overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && window.innerWidth < 768 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="mobile-sidebar-backdrop"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+      </AnimatePresence>
 
       <aside className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''} ${isSidebarOpen ? 'mobile-open' : ''}`}>
         {/* Mobile Sidebar Close Button */}

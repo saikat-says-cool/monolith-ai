@@ -1362,8 +1362,21 @@ body {
     background: var(--bg-sidebar);
   }
 
+  .sidebar.collapsed {
+    width: 0;
+    border: none;
+  }
+
   .sidebar.mobile-open {
     transform: translateX(0);
+  }
+
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 999;
   }
 
   .main-content {
@@ -1474,8 +1487,22 @@ body {
     z-index: 1001;
   }
 
+  .hero-title {
+    font-size: 2.25rem !important;
+    margin-bottom: 2rem !important;
+  }
+
+  .results-query {
+    font-size: 1.5rem !important;
+    margin-bottom: 2rem !important;
+  }
+
+  .space-sticky-label {
+    display: none !important;
+  }
+
   .brand-icon-row {
-    display: none;
+    display: none !important;
   }
 }
 
