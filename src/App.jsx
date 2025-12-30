@@ -3,10 +3,9 @@ import { Search, Home, Library, Settings, Sparkles, Share2, ChevronRight, Loader
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import axios from 'axios';
-import { searchWeb, rerankResults, getAIResponse, generateSearchQueries, parallelSearch } from './services/api';
+import { supabase } from './supabase';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const FUNCTION_URL = import.meta.env.VITE_SUPABASE_FUNCTION_URL;
 
 const App = () => {
   const [query, setQuery] = useState('');
@@ -107,21 +106,35 @@ const App = () => {
 
   const fetchThreads = async () => {
     try {
-      const res = await axios.get(`${API_URL}/conversations`, {
-        params: { space_id: activeSpaceId }
-      });
-      setThreads(res.data);
+      let query = supabase
+        .from('conversations')
+        .select('*')
+        .order('updated_at', { ascending: false });
+
+      if (activeSpaceId === 'default') {
+        query = query.is('space_id', null);
+      } else {
+        query = query.eq('space_id', activeSpaceId);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setThreads(data || []);
     } catch (err) {
-      console.error("Failed to fetch threads", err.response?.data || err.message);
+      console.error("Failed to fetch threads", err.message);
     }
   };
 
   const fetchSpaces = async () => {
     try {
-      const res = await axios.get(`${API_URL}/spaces`);
-      setSpaces(res.data);
+      const { data, error } = await supabase
+        .from('spaces')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setSpaces(data || []);
     } catch (err) {
-      console.error("Failed to fetch spaces", err);
+      console.error("Failed to fetch spaces", err.message);
     }
   };
 
@@ -129,9 +142,14 @@ const App = () => {
     if (!newSpaceData.name.trim()) return;
     try {
       if (editingSpaceId) {
-        await axios.patch(`${API_URL}/spaces/${editingSpaceId}`, newSpaceData);
+        await supabase
+          .from('spaces')
+          .update(newSpaceData)
+          .eq('id', editingSpaceId);
       } else {
-        await axios.post(`${API_URL}/spaces`, newSpaceData);
+        await supabase
+          .from('spaces')
+          .insert(newSpaceData);
       }
       setNewSpaceData({ name: '', system_prompt: '' });
       setIsSpaceModalOpen(false);
@@ -146,7 +164,10 @@ const App = () => {
     e.stopPropagation();
     if (!window.confirm("Delete this space and all its chats?")) return;
     try {
-      await axios.delete(`${API_URL}/spaces/${id}`);
+      await supabase
+        .from('spaces')
+        .delete()
+        .eq('id', id);
       if (activeSpaceId === id) setActiveSpaceId('default');
       fetchSpaces();
     } catch (err) {
@@ -156,8 +177,12 @@ const App = () => {
 
   const fetchApiKeys = async () => {
     try {
-      const res = await axios.get(`${API_URL}/keys`);
-      setApiKeys(res.data);
+      const { data, error } = await supabase
+        .from('api_keys')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setApiKeys(data || []);
     } catch (err) {
       console.error("Failed to fetch API keys", err);
     }
@@ -165,8 +190,12 @@ const App = () => {
 
   const createApiKey = async () => {
     if (!newKeyName.trim()) return;
+    const { nanoid } = await import('https://esm.sh/nanoid');
+    const newKey = `pk-${nanoid()}`;
     try {
-      await axios.post(`${API_URL}/keys`, { name: newKeyName });
+      await supabase
+        .from('api_keys')
+        .insert({ name: newKeyName, key: newKey });
       setNewKeyName('');
       fetchApiKeys();
     } catch (err) {
@@ -177,7 +206,10 @@ const App = () => {
   const deleteApiKey = async (id) => {
     if (!window.confirm("Delete this API key? This will break any apps using it.")) return;
     try {
-      await axios.delete(`${API_URL}/keys/${id}`);
+      await supabase
+        .from('api_keys')
+        .delete()
+        .eq('id', id);
       fetchApiKeys();
     } catch (err) {
       console.error("Failed to delete API key", err);
@@ -186,8 +218,13 @@ const App = () => {
 
   const fetchMessages = async (threadId) => {
     try {
-      const res = await axios.get(`${API_URL}/conversations/${threadId}/messages`);
-      setMessages(res.data);
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', threadId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setMessages(data || []);
     } catch (err) {
       console.error("Failed to fetch messages", err);
     }
@@ -195,13 +232,17 @@ const App = () => {
 
   const createNewThread = async (firstQuery) => {
     try {
-      const res = await axios.post(`${API_URL}/conversations`, {
-        title: firstQuery,
-        space_id: activeSpaceId
-      });
-      const newThread = res.data;
-      setThreads(prev => [newThread, ...prev]);
-      return newThread.id;
+      const { data, error } = await supabase
+        .from('conversations')
+        .insert({
+          title: firstQuery,
+          space_id: activeSpaceId === 'default' ? null : activeSpaceId
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      setThreads(prev => [data, ...prev]);
+      return data.id;
     } catch (err) {
       console.error("Failed to create thread", err);
       return null;
@@ -215,30 +256,25 @@ const App = () => {
       return;
     }
 
-    // Optimistic Update
     const oldThreads = [...threads];
     setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: editTitle } : t));
     setEditingThreadId(null);
 
     try {
-      await axios.patch(`${API_URL}/conversations/${threadId}`, { title: editTitle });
+      await supabase
+        .from('conversations')
+        .update({ title: editTitle })
+        .eq('id', threadId);
     } catch (err) {
       console.error("Failed to rename thread", err);
-      setThreads(oldThreads); // Rollback on failure
+      setThreads(oldThreads);
     }
-  };
-
-  const startEditing = (e, thread) => {
-    e.stopPropagation();
-    setEditingThreadId(thread.id);
-    setEditTitle(thread.title);
   };
 
   const handleDeleteThread = async (e, threadId) => {
     e.stopPropagation();
     if (!window.confirm("Delete this chat?")) return;
 
-    // Optimistic Update
     const oldThreads = [...threads];
     setThreads(prev => prev.filter(t => t.id !== threadId));
     if (activeThreadId === threadId) {
@@ -247,21 +283,38 @@ const App = () => {
     }
 
     try {
-      await axios.delete(`${API_URL}/conversations/${threadId}`);
+      await supabase
+        .from('conversations')
+        .delete()
+        .eq('id', threadId);
     } catch (err) {
       console.error("Failed to delete thread", err);
-      setThreads(oldThreads); // Rollback
+      setThreads(oldThreads);
     }
   };
 
   const saveMessage = async (threadId, role, content, searchResults = null) => {
     try {
-      const res = await axios.post(`${API_URL}/conversations/${threadId}/messages`, {
-        role,
-        content,
-        search_results: searchResults
-      });
-      return res.data;
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: threadId,
+          role,
+          content,
+          search_results: searchResults
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Update timestamp
+      await supabase
+        .from('conversations')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', threadId);
+
+      return data;
     } catch (err) {
       console.error("Failed to save message", err);
     }
@@ -269,7 +322,10 @@ const App = () => {
 
   const updateThreadTitle = async (threadId, newTitle) => {
     try {
-      await axios.patch(`${API_URL}/conversations/${threadId}`, { title: newTitle });
+      await supabase
+        .from('conversations')
+        .update({ title: newTitle })
+        .eq('id', threadId);
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle } : t));
     } catch (err) {
       console.error("Failed to update thread title auto", err);
@@ -287,11 +343,9 @@ const App = () => {
     const searchQuery = customQuery || query;
     if (!searchQuery.trim()) return;
 
-    // 1. Immediate UI update: Add User Message
     const tempUserMsgId = 'user-' + Date.now();
     const userMsg = { role: 'user', content: searchQuery, id: tempUserMsgId };
 
-    // 2. Add temporary "Thinking" Assistant Message
     const tempAiMsgId = 'ai-temp-' + Date.now();
     const tempAiMsg = {
       role: 'assistant',
@@ -303,12 +357,11 @@ const App = () => {
     setMessages(prev => [...prev, userMsg, tempAiMsg]);
     setQuery('');
     setIsSearching(true);
-    setGeneratedQueries([]); // Reset queries
+    setGeneratedQueries([]);
 
     let currentThreadId = activeThreadId;
 
     try {
-      // 3. Thread Management
       let isNewThread = false;
       if (!currentThreadId) {
         currentThreadId = await createNewThread(searchQuery);
@@ -320,65 +373,41 @@ const App = () => {
         await saveMessage(currentThreadId, 'user', searchQuery);
       }
 
-      // === MULTI-QUERY FLOW ===
-      // Step 1: Generate optimized search queries
-      setSearchStatus('Generating search paths...');
-      const queryCount = isDeepResearch ? 5 : 3;
-      const searchQueries = await generateSearchQueries(searchQuery, queryCount);
-      setGeneratedQueries(searchQueries); // Update UI with generated queries
+      setSearchStatus('Connecting to Monolith Edge...');
 
-      // Step 2: Run parallel searches across all generated queries
-      setSearchStatus(`Searching ${searchQueries.length} paths...`);
-      const countPerQuery = isDeepResearch ? 25 : 10; // More sources in deep mode
-      const allResults = await parallelSearch(searchQueries, countPerQuery);
-
-      // Step 3: Rerank all results
-      setSearchStatus(`Analyzing ${allResults.length} sources...`);
-      let reranked = allResults;
-      try {
-        if (allResults.length > 0) {
-          const topN = isDeepResearch ? 25 : 10;
-          reranked = await rerankResults(searchQuery, allResults, topN);
-        }
-      } catch (rerankError) {
-        console.warn("Reranking failed, using raw results:", rerankError);
-      }
-
-      // Step 4: AI Synthesis Phase
-      setSearchStatus('Synthesizing answer...');
-      const contextCount = isDeepResearch ? 25 : 10;
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
-      const customPrompt = currentSpace ? currentSpace.system_prompt : null;
 
-      const aiResponse = await getAIResponse(
-        searchQuery,
-        reranked.slice(0, contextCount),
-        messages,
-        isDeepResearch,
-        customPrompt
-      );
+      const { data, error } = await supabase.functions.invoke('monolith-chat', {
+        body: {
+          query: searchQuery,
+          history: messages.map(m => ({ role: m.role, content: m.content })),
+          deep: isDeepResearch,
+          space_id: activeSpaceId,
+          custom_prompt: currentSpace?.system_prompt
+        }
+      });
 
-      // 5. Update UI: Replace "Thinking" with Real Answer
+      if (error) throw error;
+
       setMessages(prev => prev.map(msg => {
         if (msg.id === tempAiMsgId) {
           return {
             role: 'assistant',
-            content: aiResponse,
+            content: data.answer,
             id: 'ai-' + Date.now(),
-            search_results: reranked, // Sources used by AI (top ranked)
-            all_sources: allResults,   // ALL sources searched (for "View All")
-            search_queries: searchQueries,
+            search_results: data.sources,
+            all_sources: data.all_sources,
+            search_queries: data.search_queries,
             isLoading: false
           };
         }
         return msg;
       }));
 
-      // 6. Persistence
-      await saveMessage(currentThreadId, 'assistant', aiResponse, reranked);
+      await saveMessage(currentThreadId, 'assistant', data.answer, data.sources);
 
       if (isNewThread) {
-        const smartTitle = await generateSmartTitle(searchQuery, aiResponse);
+        const smartTitle = await generateSmartTitle(searchQuery, data.answer);
         await updateThreadTitle(currentThreadId, smartTitle);
       }
 
@@ -388,7 +417,7 @@ const App = () => {
         if (msg.id === tempAiMsgId) {
           return {
             role: 'assistant',
-            content: "I'm sorry, I encountered an error. Please try again.",
+            content: `Error: ${err.message || 'The search engine is currently unavailable. Please check your Supabase Edge Function logs.'}`,
             id: 'error-' + Date.now(),
             isLoading: false
           };
@@ -398,7 +427,6 @@ const App = () => {
     } finally {
       setIsSearching(false);
       setSearchStatus('');
-      setGeneratedQueries([]);
     }
   };
 
