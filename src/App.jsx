@@ -389,7 +389,7 @@ const App = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabase.supabaseKey}` // Using the key from the client
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
         },
         body: JSON.stringify({
           query: searchQuery,
@@ -403,8 +403,14 @@ const App = () => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch');
+        let errorMsg = 'Failed to fetch';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch (e) {
+          errorMsg = await response.text();
+        }
+        throw new Error(errorMsg);
       }
 
       const reader = response.body.getReader();
