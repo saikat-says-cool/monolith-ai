@@ -418,50 +418,50 @@ const App = () => {
       let accumulatedAnswer = '';
       let metadataReceived = false;
       let finalData = null;
+      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
+        const chunk = decoder.decode(value, { stream: true });
 
-        // Handle metadata chunk (delimited by our custom marker)
-        if (!metadataReceived && chunk.includes('---\n\n')) {
-          const parts = chunk.split('---\n\n');
-          try {
-            const metaStr = parts[0].trim();
-            finalData = JSON.parse(metaStr);
-            metadataReceived = true;
+        if (!metadataReceived) {
+          buffer += chunk;
+          if (buffer.includes('---\n\n')) {
+            const parts = buffer.split('---\n\n');
+            try {
+              const metaStr = parts[0].trim();
+              finalData = JSON.parse(metaStr);
+              metadataReceived = true;
 
-            // Initial update with metadata (sources)
-            setMessages(prev => prev.map(msg => {
-              if (msg.id === tempAiMsgId) {
-                return {
-                  ...msg,
-                  search_results: finalData.sources,
-                  all_sources: finalData.all_sources,
-                  search_queries: finalData.search_queries,
-                  isLoading: false
-                };
-              }
-              return msg;
-            }));
-
-            // Handle the remaining part of the chunk as content
-            if (parts[1]) {
-              accumulatedAnswer += parts[1];
               setMessages(prev => prev.map(msg => {
-                if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
+                if (msg.id === tempAiMsgId) {
+                  return {
+                    ...msg,
+                    search_results: finalData.sources,
+                    all_sources: finalData.all_sources,
+                    search_queries: finalData.search_queries,
+                    isLoading: false
+                  };
+                }
                 return msg;
               }));
-            }
-          } catch (e) {
-            console.error("Failed to parse metadata", e);
-          }
-          continue;
-        }
 
-        if (metadataReceived) {
+              const preContent = parts.slice(1).join('---\n\n');
+              if (preContent) {
+                accumulatedAnswer += preContent;
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
+                  return msg;
+                }));
+              }
+              buffer = '';
+            } catch (e) {
+              console.error("Waiting for more metadata...", e);
+            }
+          }
+        } else {
           accumulatedAnswer += chunk;
           setMessages(prev => prev.map(msg => {
             if (msg.id === tempAiMsgId) return { ...msg, content: accumulatedAnswer };
