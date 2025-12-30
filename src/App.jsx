@@ -375,7 +375,7 @@ const App = () => {
       }
 
       setSearchStatus('Generating search paths...');
-      const queryCount = isDeepResearch ? 5 : 3;
+      const queryCount = isDeepResearch ? 8 : 3;
       const frontQueries = await generateSearchQueries(searchQuery, queryCount);
       setGeneratedQueries(frontQueries);
 
@@ -562,9 +562,25 @@ const App = () => {
 
   return (
     <div className="app-container">
-      <aside className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''}`}>
+      {/* Mobile Top Bar */}
+      <div className="mobile-header">
+        <button onClick={() => setIsSidebarOpen(true)} className="mobile-menu-btn">
+          <Menu size={20} />
+        </button>
+        <div className="mobile-brand">monolith</div>
+        <button onClick={() => setActiveThreadId(null)} className="mobile-new-chat">
+          <Plus size={20} />
+        </button>
+      </div>
+
+      <aside className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''} ${isSidebarOpen ? 'mobile-open' : ''}`}>
+        {/* Mobile Sidebar Close Button */}
+        <button className="mobile-close-sidebar" onClick={() => setIsSidebarOpen(false)}>
+          <X size={20} />
+        </button>
+
         <div className="brand-icon-row">
-          <div className="brand-icon" onClick={() => setActiveThreadId(null)} title="New Chat">
+          <div className="brand-icon" onClick={() => { setActiveThreadId(null); if (window.innerWidth < 768) setIsSidebarOpen(false); }} title="New Chat">
             <Plus size={24} />
           </div>
           <button className="toggle-sidebar-btn" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
@@ -596,7 +612,7 @@ const App = () => {
                 <div
                   key={space.id}
                   className={`nav-item group ${activeSpaceId === space.id ? 'active' : ''}`}
-                  onClick={() => setActiveSpaceId(space.id)}
+                  onClick={() => { setActiveSpaceId(space.id); if (window.innerWidth < 768) setIsSidebarOpen(false); }}
                 >
                   <Layers size={16} className="shrink-0" />
                   <span className="nav-text">{space.name}</span>
@@ -628,6 +644,7 @@ const App = () => {
                       setMessages([]); // Clear immediately
                       setActiveThreadId(thread.id);
                     }
+                    if (window.innerWidth < 768) setIsSidebarOpen(false);
                   }}
                   style={{ cursor: 'pointer' }}
                 >
