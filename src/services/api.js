@@ -53,7 +53,7 @@ export const searchWeb = async (query, count = 10) => {
                 query: query,
                 summary: true,
                 count: count,
-                freshness: 'day' // Prioritize real-time news from the past 24 hours
+                freshness: 'all' // Default to all-time, can be overridden by specific logic
             }, {
                 headers: {
                     'Authorization': `Bearer ${apiKey}`,
@@ -161,7 +161,8 @@ RULES:
 2. Make queries specific and search-engine friendly (no conversational fluff).
 3. Include relevant keywords, dates (like "2024" or "latest"), and specific terms.
 4. If the question is about comparisons, generate separate queries for each item being compared.
-5. Return ONLY a JSON array of strings, nothing else. Example: ["query 1", "query 2", "query 3"]
+5. RECENCY: If the question is about current events or a time-sensitive topic, ensure at least one query targets the absolute latest developments (using terms like "today", "now", "breaking").
+6. Return ONLY a JSON array of strings, nothing else. Example: ["query 1", "query 2", "query 3"]
 
 USER QUESTION: ${userQuery}`;
 
@@ -234,7 +235,7 @@ export const getAIResponse = async (query, contexts, history = [], deep = false,
 
     const systemPrompt = `${customSystemPrompt ? `CUSTOM INSTRUCTIONS: ${customSystemPrompt}\n\n` : ''}${basePrompt}
 
-KNOWLEDGE (REAL-TIME SEARCH RESULTS - PAST 24H):
+KNOWLEDGE (REAL-TIME SEARCH RESULTS):
 ${contextText}
 
 CONVERSATION HISTORY:
@@ -242,7 +243,7 @@ ${historyText}
 
 INSTRUCTIONS:
 1. Use the provided search results to inform your answer. ${deep ? 'Analyze the sources deeply, looking for connections and detailed insights.' : 'Present them in a natural, conversational way.'}
-2. **REAL-TIME PRIORITY**: You have access to real-time search results. Prioritize the most recent information from the past 24 hours. Always lead with the absolute latest developments if available.
+2. **PRIORITIZE RECENCY**: If recent information is available, prioritize it. Always lead with the latest developments if the topic is current.
 3. DO NOT use inline citations like [1], [2], or (Source 1). Keep the text clean.
 4. Reference the conversation history if the user refers back to previous topics.
 5. ${deep ? 'Provide a long, exhaustive response with multiple sections if necessary.' : 'Be thorough but concise.'}
