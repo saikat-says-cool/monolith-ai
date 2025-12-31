@@ -8,6 +8,17 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Global guidelines that cannot be overridden by user prompts
+const GLOBAL_MONOLITH_GUIDELINES = `
+CORE PROTOCOLS:
+1. TRUTH & ACCURACY: Never hallucinate. If search results are ambiguous or contradictory, state so.
+2. CURRENT CONTEXT: You have a high-latency connection to the web. Always check the current date/time provided.
+3. CITATION HYGIENE: Do not use inline [1][2] markers. Instead, refer to sources naturally (e.g., "According to the New York Times..." or "Recent data from the World Bank suggests...").
+4. PERSONA: You are Monolith, a researcher of unparalleled caliber. You are sophisticated, articulate, and deeply helpful.
+5. NO PLACEHOLDERS: Never say "I will look that up" or "Searching...". You are provide the FINAL synthesis.
+6. ERROR HANDLING: If search results are entirely missing, briefly mention that your web-access layer hit a snag but provide the best possible answer from internal knowledge.
+`;
+
 serve(async (req) => {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -45,9 +56,12 @@ serve(async (req) => {
             console.log(`[Monolith] Internal web request authorized.`)
         }
 
-
         const body = await req.json();
         const { query: searchQuery, queries = [], history = [], deep = false, space_id = 'default', custom_prompt = null } = body;
+
+        // Get current Date/Time for context
+        const now = new Date();
+        const dateTimeContext = `Current Date/Time: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' })}`;
 
         // 1. Setup API Keys
         const LANGSEARCH_KEYS = Deno.env.get('LANGSEARCH_KEYS')?.split(',').map(k => k.trim()).filter(Boolean) || []
@@ -75,7 +89,7 @@ serve(async (req) => {
                         console.warn(`[Safety Net] Key index ${keyIndex} failed (Status: ${status}). Rotating to next key...`);
                         attempts++;
                         if (attempts < keys.length) {
-                            await sleep(status === 429 ? 1200 : 300); // Paced delay
+                            await sleep(status === 429 ? 2000 : 500); // Increased paced delay for reliability
                             continue;
                         }
                     }
@@ -90,115 +104,135 @@ serve(async (req) => {
         let searchStrategy = {
             depth_label: deep ? "Exhaustive" : "Adaptive",
             count_per_call: deep ? 35 : 15,
-            use_hour_layer: true,
+            use_hour_layer: false,
+            freshness: "all" as any,
             conversational_tone: !deep // Personality only for normal mode
         };
 
-        if (!generatedQueries || generatedQueries.length === 0) {
-            console.log(`[Monolith] Planning search strategy for: ${searchQuery}`)
-            const plannerResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
-                const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'LongCat-Flash-Chat',
-                        messages: [
+        console.log(`[Monolith] Planning search strategy for: ${searchQuery}`)
+        const plannerResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
+            const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'LongCat-Flash-Chat',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: `You are the Monolith Search Planner. Your goal is to determine how to best find information for a query.
+                            Output a JSON object:
                             {
-                                role: 'system',
-                                content: `You are the Monolith Search Planner. Your goal is to determine how deep to search.
-                                Output a JSON object:
-                                {
-                                  "queries": ["query1", ...],
-                                  "depth_label": "Surface" | "Standard" | "Deep",
-                                  "use_hour_layer": boolean,
-                                  "freshness": "hour" | "day" | "week" | "month" | "year" | "all",
-                                  "reasoning": "short explanation"
-                                }
-                                - Surface: 1-2 queries (Quick facts). Use 15 results.
-                                - Standard: 3 queries (Normal search). Use 20 results.
-                                - Deep: 4-5 queries (Complex/Deep). Use 30 results.
-                                - use_hour_layer: true if search is time-sensitive (news, stocks, current events).`
-                            },
-                            { role: 'user', content: searchQuery }
-                        ],
-                        temperature: 0.1,
-                        response_format: { type: "json_object" }
-                    })
-                });
-                if (!resp.ok) {
-                    const errBody = await resp.text();
-                    console.error(`[Monolith] API Error (Status: ${resp.status}):`, errBody);
-                    throw { status: resp.status, message: errBody };
-                }
-                const data = await resp.json();
-                let content = data.choices[0].message.content.trim();
-                // Safety clean
-                if (content.includes('```')) content = content.replace(/```json|```/g, '').trim();
-                return JSON.parse(content);
+                              "queries": ["query1", ...],
+                              "depth_label": "Surface" | "Standard" | "Deep",
+                              "use_hour_layer": boolean,
+                              "freshness": "hour" | "day" | "week" | "month" | "year" | "all",
+                              "reasoning": "short explanation"
+                            }
+                            - freshness: 
+                                - "hour"/"day": For breaking news, stocks, sports results, or "in the last 24h" queries.
+                                - "week"/"month": For ongoing events, recent trends (last few days/weeks).
+                                - "year": For recent history, annual reports, 2024/2025 specific info.
+                                - "all": For general knowledge, history, or whenever background context is better than just news.
+                            - use_hour_layer: true ONLY if the query is extremely time-sensitive (news happening NOW).
+                            - queries: Generate search-engine optimized strings. If the user provided specific queries already, you can return them or suggest better ones.`
+                        },
+                        { role: 'user', content: `Query: ${searchQuery}${queries.length > 0 ? `\nExisting Query Paths: ${JSON.stringify(queries)}` : ''}` }
+                    ],
+                    temperature: 0.1,
+                    response_format: { type: "json_object" }
+                })
             });
+            if (!resp.ok) {
+                const errBody = await resp.text();
+                console.error(`[Monolith] API Error (Status: ${resp.status}):`, errBody);
+                throw { status: resp.status, message: errBody };
+            }
+            const data = await resp.json();
+            let content = data.choices[0].message.content.trim();
+            // Safety clean
+            if (content.includes('```')) content = content.replace(/```json|```/g, '').trim();
+            return JSON.parse(content);
+        });
 
+        if (!generatedQueries || generatedQueries.length === 0) {
             generatedQueries = plannerResponse.queries;
-            searchStrategy.depth_label = plannerResponse.depth_label;
-            searchStrategy.use_hour_layer = plannerResponse.use_hour_layer;
-
-            // Adjust results count based on planner depth
-            if (plannerResponse.depth_label === "Surface") searchStrategy.count_per_call = 15;
-            else if (plannerResponse.depth_label === "Standard") searchStrategy.count_per_call = 20;
-            else if (plannerResponse.depth_label === "Deep") searchStrategy.count_per_call = 30;
-
-            console.log(`[Monolith] Planner selected ${searchStrategy.depth_label} depth with ${generatedQueries.length} queries.`)
-            if (!generatedQueries.includes(searchQuery)) generatedQueries.unshift(searchQuery);
         }
+        searchStrategy.depth_label = plannerResponse.depth_label;
+        searchStrategy.use_hour_layer = plannerResponse.use_hour_layer;
+        searchStrategy.freshness = plannerResponse.freshness;
 
-        // 3. Parallel Search
-        console.log(`[Monolith] Searching ${generatedQueries.length} paths with pacing...`)
-        const staggerDelay = deep ? 1500 : 800;
+        // Adjust results count based on planner depth
+        if (plannerResponse.depth_label === "Surface") searchStrategy.count_per_call = 15;
+        else if (plannerResponse.depth_label === "Standard") searchStrategy.count_per_call = 20;
+        else if (plannerResponse.depth_label === "Deep") searchStrategy.count_per_call = 35; // Increased for Deep
 
-        const searchPromises = generatedQueries.flatMap((q, qIndex) => {
-            const layers = [];
+        console.log(`[Monolith] Planner selected ${searchStrategy.depth_label} depth, freshness: ${searchStrategy.freshness}, hour_layer: ${searchStrategy.use_hour_layer}.`)
+        if (!generatedQueries.includes(searchQuery)) generatedQueries.unshift(searchQuery);
 
-            // Layer 1: Last Hour
-            if (searchStrategy.use_hour_layer || deep) {
-                layers.push((async () => {
-                    await sleep(qIndex * staggerDelay);
-                    return executeRotatedRequest(LANGSEARCH_KEYS, async (apiKey) => {
-                        const resp = await fetch('https://api.langsearch.com/v1/web-search', {
-                            method: 'POST',
-                            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ query: q, summary: true, count: searchStrategy.count_per_call, freshness: 'hour' })
-                        });
-                        if (!resp.ok) {
-                            const errBody = await resp.text();
-                            throw { status: resp.status, message: `Search(Hour) Error: ${errBody}` };
-                        }
-                        const data = await resp.json();
-                        return data.data?.webPages?.value || [];
-                    }, qIndex);
-                })());
+        // 3. Orchestrated Search (Strict pacing to respect 1 req/sec limit)
+        console.log(`[Monolith] Searching ${generatedQueries.length} paths with strict pacing...`)
+
+        const allSearchLayers: any[] = [];
+        generatedQueries.forEach((q: string, qIndex: number) => {
+            // Priority 1: Requested Freshness (if not 'all')
+            if (searchStrategy.freshness !== 'all') {
+                allSearchLayers.push({ query: q, freshness: searchStrategy.freshness, index: qIndex });
             }
 
-            // Layer 2: Last Day
-            layers.push((async () => {
-                await sleep((qIndex * staggerDelay) + (staggerDelay / 2));
-                return executeRotatedRequest(LANGSEARCH_KEYS, async (apiKey) => {
+            // Priority 2: Hour layer for extreme recency
+            if (searchStrategy.use_hour_layer && searchStrategy.freshness !== 'hour') {
+                allSearchLayers.push({ query: q, freshness: 'hour', index: qIndex });
+            }
+
+            // Priority 3: General Knowledge (Context)
+            // We always include 'all' for the first query or in deep mode to ensure depth.
+            if (qIndex === 0 || deep || searchStrategy.freshness === 'all') {
+                allSearchLayers.push({ query: q, freshness: 'all', index: qIndex });
+            }
+        });
+
+        const resultsArray: any[] = [];
+        const staggerMs = 1100; // Safe 1.1s gap to strictly respect 1 req/sec
+
+        // Sequential execution with pacing for search calls
+        for (let i = 0; i < allSearchLayers.length; i++) {
+            const layer = allSearchLayers[i];
+            try {
+                console.log(`[Monolith] Fetching Layer ${i + 1}/${allSearchLayers.length}: [${layer.freshness}] ${layer.query}`);
+                const layerResults = await executeRotatedRequest(LANGSEARCH_KEYS, async (apiKey) => {
                     const resp = await fetch('https://api.langsearch.com/v1/web-search', {
                         method: 'POST',
                         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query: q, summary: true, count: searchStrategy.count_per_call, freshness: 'day' })
+                        body: JSON.stringify({
+                            query: layer.query,
+                            summary: true,
+                            count: searchStrategy.count_per_call,
+                            freshness: layer.freshness
+                        })
                     });
                     if (!resp.ok) {
                         const errBody = await resp.text();
-                        throw { status: resp.status, message: `Search(Day) Error: ${errBody}` };
+                        // Special handling for 429 even inside rotated request to be extra safe
+                        if (resp.status === 429) {
+                            console.warn("[Monolith] Hard rate limit hit, doubling wait time...");
+                            await sleep(2000);
+                        }
+                        throw { status: resp.status, message: `Search(${layer.freshness}) Error: ${errBody}` };
                     }
                     const data = await resp.json();
                     return data.data?.webPages?.value || [];
-                }, qIndex + generatedQueries.length);
-            })());
+                }, i);
+                resultsArray.push(layerResults);
+            } catch (err) {
+                console.warn(`[Monolith Orchestrator] Search layer failed but proceeding:`, err);
+            }
 
-            return layers;
-        });
+            // Pacing: Wait only if not the last request
+            if (i < allSearchLayers.length - 1) {
+                await sleep(staggerMs);
+            }
+        }
 
-        const resultsArray = await Promise.all(searchPromises);
         const allResults = [];
         const seenUrls = new Set();
         for (const list of resultsArray) {
@@ -221,52 +255,69 @@ serve(async (req) => {
                 chunks.push(docsToRerank.slice(i, i + chunkSize));
             }
 
-            const rerankPromises = chunks.map((chunk, idx) => executeRotatedRequest(LANGSEARCH_KEYS, async (apiKey) => {
-                await sleep(idx * staggerDelay);
-                const resp = await fetch('https://api.langsearch.com/v1/rerank', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'langsearch-reranker-v1',
-                        query: searchQuery,
-                        documents: chunk.map(d => (d.summary || d.snippet || d.name || "").slice(0, 800)),
-                        top_n: chunk.length,
-                        return_documents: false
-                    })
-                });
-                if (!resp.ok) {
-                    const errBody = await resp.text();
-                    throw { status: resp.status, message: `Rerank Error: ${errBody}` };
+            // Rerank also needs pacing if multiple chunks
+            for (let idx = 0; idx < chunks.length; idx++) {
+                const chunk = chunks[idx];
+                try {
+                    const chunkReranked = await executeRotatedRequest(LANGSEARCH_KEYS, async (apiKey) => {
+                        const resp = await fetch('https://api.langsearch.com/v1/rerank', {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                model: 'langsearch-reranker-v1',
+                                query: searchQuery,
+                                documents: chunk.map(d => (d.summary || d.snippet || d.name || "").slice(0, 800)),
+                                top_n: chunk.length,
+                                return_documents: false
+                            })
+                        });
+                        if (!resp.ok) {
+                            const errBody = await resp.text();
+                            throw { status: resp.status, message: `Rerank Error: ${errBody}` };
+                        }
+                        const data = await resp.json();
+                        return data.results.map(r => ({ ...chunk[r.index], relevance_score: r.relevance_score }));
+                    }, idx + resultsArray.length); // Use unique offset
+                    reranked.push(...chunkReranked);
+                } catch (err) {
+                    console.warn(`[Monolith Orchestrator] Rerank chunk ${idx} failed:`, err);
                 }
-                const data = await resp.json();
-                return data.results.map(r => ({ ...chunk[r.index], relevance_score: r.relevance_score }));
-            }, idx));
 
-            const rerankedChunks = await Promise.all(rerankPromises);
-            reranked = rerankedChunks.flat().sort((a, b) => b.relevance_score - a.relevance_score);
+                if (idx < chunks.length - 1) await sleep(staggerMs);
+            }
+            reranked.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
         }
 
         // 5. Synthesis
         const contextLimit = deep ? 40 : 20;
         console.log(`[Monolith] Synthesizing answer from top ${Math.min(reranked.length, contextLimit)} sources...`)
 
-        const contextText = reranked.slice(0, contextLimit).map((c, i) => {
+        const contextText = (reranked.length > 0 ? reranked : allResults).slice(0, contextLimit).map((c, i) => {
             const content = (c.summary || c.snippet || "").slice(0, 1200);
-            return `[SOURCE ${i + 1}] Title: ${c.name}\nContent: ${content}`;
+            const dateStr = c.datePublished ? ` (Published: ${c.datePublished})` : (c.dateLastCrawled ? ` (Cached: ${c.dateLastCrawled})` : "");
+            return `[SOURCE ${i + 1}] Title: ${c.name}${dateStr}\nURL: ${c.url}\nContent: ${content}`;
         }).join('\n\n');
 
-        const basePrompt = `You are Monolith AI, a highly intelligent and conversational research assistant.
-Use the provided sources to answer the query: "${searchQuery}"
+        const basePrompt = `You are Monolith AI.
+CONTEXT:
+${dateTimeContext}
+Search Strategy: Freshness=${searchStrategy.freshness}, Time-Sensitive=${searchStrategy.use_hour_layer}
 
-${searchStrategy.conversational_tone ?
-                'BE CONVERSATIONAL: Talk like a brilliant friend who has just done the research for you. Avoid robotic "Based on the sources..." phrases. Instead, weave the information into a natural, engaging narrative. Use a touch of personality but keep it professional and authoritative.' :
-                'BE EXHAUSTIVE: Provide a thorough, structured, and citation-heavy research report. Cover all nuances, data points, and perspectives found in the sources.'
+QUERY: "${searchQuery}"
+
+STRATEGY: ${searchStrategy.conversational_tone ?
+                'BE CONVERSATIONAL: Talk like a brilliant friend who has just done the research for you. Weave the information into a natural, engaging narrative. Use a touch of personality but keep it professional and authoritative.' :
+                'BE EXHAUSTIVE: Provide a thorough, structured, and citation-heavy research report. Cover all nuances, data points, and perspectives found in the sources. Use detailed sections.'
             }
 
 SOURCES:
-${contextText}`;
+${contextText || "No direct web results found. Use your internal knowledge but acknowledge the lack of recent sources."}`;
 
-        const finalSystemPrompt = custom_prompt ? `USER RULES: ${custom_prompt}\n\n${basePrompt}` : basePrompt;
+        // Combine prompts: Global -> User Custom -> Base
+        const finalSystemPrompt = `
+${GLOBAL_MONOLITH_GUIDELINES}
+${custom_prompt ? `USER-SPECIFIC INSTRUCTIONS:\n${custom_prompt}\n` : ''}
+${basePrompt}`;
 
         const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
             const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
@@ -279,7 +330,7 @@ ${contextText}`;
                         ...history,
                         { role: 'user', content: searchQuery }
                     ],
-                    max_tokens: deep ? 3000 : 1500,
+                    max_tokens: deep ? 4096 : 2048,
                     temperature: 0.7
                 })
             });
@@ -293,7 +344,7 @@ ${contextText}`;
 
         return new Response(JSON.stringify({
             answer: aiResponse,
-            sources: reranked.slice(0, contextLimit),
+            sources: (reranked.length > 0 ? reranked : allResults).slice(0, contextLimit),
             all_sources: allResults,
             search_queries: generatedQueries
         }), {
@@ -312,3 +363,4 @@ ${contextText}`;
         });
     }
 })
+
