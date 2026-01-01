@@ -602,17 +602,58 @@ body {
 
 .search-wrapper {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 6px;
+  border-radius: 24px;
+  padding: 8px;
   box-shadow: var(--shadow-xl);
   transition: var(--transition);
   backdrop-filter: blur(20px);
   position: relative;
-  gap: 8px;
+  gap: 4px;
   width: 100%;
+}
+
+.search-modes-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.mode-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: var(--transition);
+  cursor: pointer;
+}
+
+.mode-toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.mode-toggle-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.search-input-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
 }
 
 .search-wrapper:focus-within {

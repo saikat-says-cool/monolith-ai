@@ -37,8 +37,9 @@ const App = () => {
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
 
-  // Search/Deep Research State
+  const [isSearchActive, setIsSearchActive] = useState(true);
   const [isDeepResearch, setIsDeepResearch] = useState(false);
+  const [isThinkingMode, setIsThinkingMode] = useState(false); // New: Thinking Mode Toggle
   const [showSourcesSidebar, setShowSourcesSidebar] = useState(false);
   const [sidebarSources, setSidebarSources] = useState([]);
   const [generatedQueries, setGeneratedQueries] = useState([]); // Multi-query flow
@@ -374,22 +375,28 @@ const App = () => {
         await saveMessage(currentThreadId, 'user', searchQuery);
       }
 
-      setSearchStatus('Generating search paths...');
-      const queryCount = isDeepResearch ? 8 : 3;
-      const frontQueries = await generateSearchQueries(searchQuery, queryCount);
-      setGeneratedQueries(frontQueries);
+      // 1. Determine Search Mode
+      let finalQueries = [];
+      if (isSearchActive || isDeepResearch) {
+        setSearchStatus('Generating search paths...');
+        const queryCount = isDeepResearch ? 8 : 3;
+        finalQueries = await generateSearchQueries(searchQuery, queryCount);
+        setGeneratedQueries(finalQueries);
+        setSearchStatus(`Searching ${finalQueries.length} paths...`);
+      } else {
+        setSearchStatus('Thinking offline...');
+      }
 
-      setSearchStatus(`Searching ${frontQueries.length} paths...`);
-
-      setSearchStatus('Planning strategy...');
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
       const { data, error } = await supabase.functions.invoke('monolith-chat', {
         body: {
           query: searchQuery,
-          queries: frontQueries,
+          queries: finalQueries.length > 0 ? finalQueries : null,
           history: messages.map(m => ({ role: m.role, content: m.content })),
+          search: isSearchActive || isDeepResearch,
           deep: isDeepResearch,
+          thinking: isThinkingMode, // New: Thinking flag
           space_id: activeSpaceId,
           custom_prompt: currentSpace?.system_prompt
         }
@@ -731,25 +738,55 @@ const App = () => {
 
                 <div className="search-container">
                   <form onSubmit={handleSearch} className="search-wrapper">
-                    <button
-                      type="button"
-                      className={`deep-research-btn ${isDeepResearch ? 'active' : ''}`}
-                      onClick={() => setIsDeepResearch(!isDeepResearch)}
-                      title="Deep Research Mode"
-                    >
-                      <Sparkles size={14} className="sparkle-icon" />
-                      Deep Research
-                    </button>
-                    <input
-                      type="text"
-                      className="search-input"
-                      placeholder="Ask anything..."
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                    />
-                    <button type="submit" className="search-submit">
-                      <ChevronRight size={24} />
-                    </button>
+                    <div className="search-modes-row">
+                      <button
+                        type="button"
+                        className={`mode-toggle-btn ${isSearchActive ? 'active' : ''}`}
+                        onClick={() => {
+                          const next = !isSearchActive;
+                          setIsSearchActive(next);
+                          if (!next) setIsDeepResearch(false);
+                        }}
+                        title="Web Search"
+                      >
+                        <Globe size={14} />
+                        Search
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-toggle-btn ${isDeepResearch ? 'active' : ''}`}
+                        onClick={() => {
+                          const next = !isDeepResearch;
+                          setIsDeepResearch(next);
+                          if (next) setIsSearchActive(true);
+                        }}
+                        title="Deep Research Mode"
+                      >
+                        <Sparkles size={14} />
+                        Research
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-toggle-btn ${isThinkingMode ? 'active' : ''}`}
+                        onClick={() => setIsThinkingMode(!isThinkingMode)}
+                        title="Reasoning/Thinking Model"
+                      >
+                        <BrainCircuit size={14} />
+                        Thinking
+                      </button>
+                    </div>
+                    <div className="search-input-group">
+                      <input
+                        type="text"
+                        className="search-input"
+                        placeholder={!(isSearchActive || isDeepResearch) ? "Chat offline..." : "Ask anything..."}
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                      />
+                      <button type="submit" className="search-submit">
+                        <ChevronRight size={24} />
+                      </button>
+                    </div>
                   </form>
                 </div>
 
