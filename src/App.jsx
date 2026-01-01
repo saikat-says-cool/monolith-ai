@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Home, Library, Settings, Sparkles, Share2, ChevronRight, Loader2, Globe, BrainCircuit, MessageSquare, Plus, Menu, Trash2, Edit2, Check, X, Moon, Sun, BookOpen, Layers, PlusCircle, MoreVertical } from 'lucide-react';
+import { Search, Home, Library, Settings, Sparkles, Share2, ChevronRight, Loader2, Globe, BrainCircuit, MessageSquare, Plus, Menu, Trash2, Edit2, Check, X, Moon, Sun, BookOpen, Layers, PlusCircle, MoreVertical, Mic, MicOff, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { supabase } from './supabase';
-import { generateSearchQueries } from './services/api';
+import { generateSearchQueries, transcribeAudio } from './services/api';
 
 const FUNCTION_URL = import.meta.env.VITE_SUPABASE_FUNCTION_URL;
 
@@ -45,7 +45,14 @@ const App = () => {
   const [generatedQueries, setGeneratedQueries] = useState([]); // Multi-query flow
 
 
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcriptionLoading, setTranscriptionLoading] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const abortControllerRef = useRef(null);
+
   const messagesEndRef = useRef(null);
+
 
   useEffect(() => {
     fetchSpaces();
@@ -98,6 +105,16 @@ const App = () => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, isSearching]);
+
+  // Textarea auto-resize
+  useEffect(() => {
+    const textareas = document.querySelectorAll('.search-input');
+    textareas.forEach(ta => {
+      ta.style.height = 'auto';
+      ta.style.height = ta.scrollHeight + 'px';
+    });
+  }, [query]);
+
 
   // Handle initial scroll when a new search starts
   useEffect(() => {
@@ -340,6 +357,74 @@ const App = () => {
     return title;
   };
 
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsSearching(false);
+      setSearchStatus('');
+      // Clean up the last message if it was loading
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last && last.isLoading) {
+          return prev.map((m, i) => i === prev.length - 1 ? { ...m, isLoading: false, content: m.content || 'Generation stopped by user.' } : m);
+        }
+        return prev;
+      });
+    }
+  };
+
+  // Voice Typing logic
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        setTranscriptionLoading(true);
+        try {
+          const text = await transcribeAudio(audioBlob);
+          setQuery(prev => prev + (prev ? ' ' : '') + text);
+        } catch (err) {
+          console.error("Transcription failed", err);
+          alert("Voice transcription failed: " + err.message);
+        } finally {
+          setTranscriptionLoading(false);
+        }
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Error accessing microphone", err);
+      alert("Microphone access denied or not available.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSearch(e);
+    }
+  };
+
+
   const handleSearch = async (e, customQuery = null) => {
     if (e) e.preventDefault();
     const searchQuery = customQuery || query;
@@ -389,6 +474,9 @@ const App = () => {
 
       const currentSpace = spaces.find(s => s.id === activeSpaceId);
 
+      // Initialize AbortController for this request
+      abortControllerRef.current = new AbortController();
+
       const { data, error } = await supabase.functions.invoke('monolith-chat', {
         body: {
           query: searchQuery,
@@ -399,7 +487,8 @@ const App = () => {
           thinking: isThinkingMode, // New: Thinking flag
           space_id: activeSpaceId,
           custom_prompt: currentSpace?.system_prompt
-        }
+        },
+        signal: abortControllerRef.current.signal
       });
 
       if (error) throw error;
@@ -442,6 +531,7 @@ const App = () => {
     } finally {
       setIsSearching(false);
       setSearchStatus('');
+      abortControllerRef.current = null;
     }
   };
 
@@ -776,16 +866,34 @@ const App = () => {
                       </button>
                     </div>
                     <div className="search-input-group">
-                      <input
-                        type="text"
+                      <textarea
                         className="search-input"
-                        placeholder={!(isSearchActive || isDeepResearch) ? "Chat offline..." : "Ask anything..."}
+                        placeholder={!(isSearchActive || isDeepResearch) ? (transcriptionLoading ? "Transcribing..." : "Chat offline...") : (transcriptionLoading ? "Transcribing..." : "Ask anything...")}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        rows={1}
+                        style={{ height: 'auto', minHeight: '44px', padding: '12px 4px' }}
                       />
-                      <button type="submit" className="search-submit">
-                        <ChevronRight size={24} />
-                      </button>
+                      <div className="search-actions">
+                        <button
+                          type="button"
+                          className={`mic-btn ${isRecording ? 'recording' : ''}`}
+                          onClick={isRecording ? stopRecording : startRecording}
+                          title={isRecording ? "Stop Recording" : "Voice Typing"}
+                        >
+                          {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+                        </button>
+                        {isSearching ? (
+                          <button type="button" className="search-stop" onClick={handleStopGeneration} title="Stop Generation">
+                            <Square size={20} fill="currentColor" />
+                          </button>
+                        ) : (
+                          <button type="submit" className="search-submit">
+                            <ChevronRight size={24} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </form>
                 </div>
@@ -943,16 +1051,34 @@ const App = () => {
                   </button>
                 </div>
                 <div className="search-input-group">
-                  <input
-                    type="text"
+                  <textarea
                     className="search-input"
-                    placeholder={!(isSearchActive || isDeepResearch) ? "Chat offline..." : "Ask a follow-up..."}
+                    placeholder={!(isSearchActive || isDeepResearch) ? (transcriptionLoading ? "Transcribing..." : "Chat offline...") : (transcriptionLoading ? "Transcribing..." : "Ask a follow-up...")}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    rows={1}
+                    style={{ height: 'auto', minHeight: '44px', padding: '12px 4px' }}
                   />
-                  <button type="submit" className="search-submit">
-                    <ChevronRight size={24} />
-                  </button>
+                  <div className="search-actions">
+                    <button
+                      type="button"
+                      className={`mic-btn ${isRecording ? 'recording' : ''}`}
+                      onClick={isRecording ? stopRecording : startRecording}
+                      title={isRecording ? "Stop Recording" : "Voice Typing"}
+                    >
+                      {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+                    </button>
+                    {isSearching ? (
+                      <button type="button" className="search-stop" onClick={handleStopGeneration} title="Stop Generation">
+                        <Square size={20} fill="currentColor" />
+                      </button>
+                    ) : (
+                      <button type="submit" className="search-submit">
+                        <ChevronRight size={24} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </form>
             </div>

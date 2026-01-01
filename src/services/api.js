@@ -275,3 +275,97 @@ INSTRUCTIONS:
         return "I apologize, but I'm having trouble generating an answer right now. Please try again later.";
     }
 };
+// AssemblyAI Voice Transcription Pool
+const ASSEMBLY_AI_KEYS = [
+    '423b13e0543d494ba19bf307da601665',
+    'aab3043373c64ed1ab847b7b042d5842',
+    '7763ab46f71b482ab99b0e89e82af886',
+    '030ba214fc8443348935c27fd786c59f',
+    '287d8bc4fab746ec9e9b09cb46e10ddf'
+];
+
+let currentAssemblyAIKeyIndex = 0;
+
+const getAssemblyAIKey = () => ASSEMBLY_AI_KEYS[currentAssemblyAIKeyIndex];
+
+const rotateAssemblyAIKey = () => {
+    currentAssemblyAIKeyIndex = (currentAssemblyAIKeyIndex + 1) % ASSEMBLY_AI_KEYS.length;
+    console.log(`[AssemblyAI] Rate limit or error hit. Rotating to key index ${currentAssemblyAIKeyIndex}`);
+};
+
+const executeAssemblyAIRequest = async (requestFn) => {
+    let attempts = 0;
+    while (attempts < ASSEMBLY_AI_KEYS.length) {
+        try {
+            const apiKey = getAssemblyAIKey();
+            return await requestFn(apiKey);
+        } catch (error) {
+            const status = error.response ? error.response.status : (error.status || 500);
+            // 429: Too Many Requests, 401/403: Potentially exhausted/invalid in some cases, usually 429 for rates
+            if (status === 429 || status === 402) {
+                rotateAssemblyAIKey();
+                attempts++;
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw new Error("All AssemblyAI API keys are exhausted or rate-limited.");
+};
+
+export const transcribeAudio = async (audioBlob) => {
+    try {
+        // 1. Upload the audio file with rotation support
+        const uploadUrl = await executeAssemblyAIRequest(async (apiKey) => {
+            const response = await axios.post('https://api.assemblyai.com/v2/upload', audioBlob, {
+                headers: {
+                    'Authorization': apiKey,
+                    'Content-Type': 'application/octet-stream'
+                }
+            });
+            return response.data.upload_url;
+        });
+
+        // 2. Start transcription with rotation support
+        const transcriptId = await executeAssemblyAIRequest(async (apiKey) => {
+            const response = await axios.post('https://api.assemblyai.com/v2/transcript', {
+                audio_url: uploadUrl
+            }, {
+                headers: {
+                    'Authorization': apiKey,
+                    'Content-Type': 'application/json'
+                }
+            });
+            return response.data.id;
+        });
+
+        // 3. Poll for result with the SAME key that started the transcript (AssemblyAI transcript IDs are key-specific)
+        // Note: Polling should ideally use the same key, but AssemblyAI keeps transcript data for a while.
+        // If the key rotated between upload and transcript, we might have issues, but let's assume session consistency for polling.
+        const activeKey = getAssemblyAIKey();
+
+        while (true) {
+            const statusResponse = await axios.get(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+                headers: {
+                    'Authorization': activeKey
+                }
+            });
+
+            const { status, text, error } = statusResponse.data;
+
+            if (status === 'completed') {
+                return text;
+            } else if (status === 'error') {
+                throw new Error(`AssemblyAI Transcription Error: ${error}`);
+            }
+
+            // Wait for 1.5 seconds before polling again
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+    } catch (error) {
+        console.error('Transcription Error:', error);
+        throw error;
+    }
+};
+
+

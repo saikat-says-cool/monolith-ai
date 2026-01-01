@@ -36,11 +36,24 @@ Relevance is not left to chance. Monolith runs the top 100 unique results throug
 - **Score Injection**: The reranker assigns a `relevance_score` to each document.
 - **Re-Sorting**: The list is re-sorted based on these new scores, moving the most "thematically accurate" information to the top, regardless of which search path originally found it.
 
-### Stage 5: Synthesis Orchestration (Prompt Engineering)
-The final AI response is an orchestration of three distinct information streams:
-1.  **Global Protocols**: Hardcoded guidelines (e.g., "Never say 'Searching...'", "Use natural citations").
-2.  **Contextual Memory**: Real-time date/time, search strategy labels, and conversation history.
-3.  **Filtered Search Context**: The top-N reranked snippets, each enriched with publication/crawl dates for temporal awareness.
+### Stage 5: Synthesis Orchestration (Tool-Based Reading Architecture)
+The final AI response uses a **Tool-Based External Reading** model instead of prompt stuffing:
+
+**Message Flow:**
+```
+[System: Static Guidelines] → [History] → [User: Query] → [Assistant: Tool Call] → [Tool: Research Documents]
+```
+
+**Why This Architecture?**
+1.  **Cacheable System Prompt**: The system prompt is now static (guidelines + date/time + mode). This enables context caching on subsequent turns = **faster time-to-first-token**.
+2.  **External Document Perception**: By injecting search results as a `tool` response, the AI treats them as "documents it's reading" rather than "instructions to follow." This improves accuracy and reduces hallucination.
+3.  **Inline Citations**: The AI now uses `[1]`, `[2]`, `[n]` markers that map directly to the numbered documents in the tool response.
+
+**The Four Streams:**
+1.  **Global Protocols**: Elite persona, citation rules, formatting guidelines (static, cacheable).
+2.  **Mode Declaration**: `WEB RESEARCH` or `OFFLINE` depending on user toggle.
+3.  **Conversation History**: Previous turns for context.
+4.  **Research Database (Tool Response)**: The top-N reranked snippets formatted as `[DOCUMENT 1]`, `[DOCUMENT 2]`, etc.
 
 ---
 

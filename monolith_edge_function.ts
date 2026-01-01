@@ -30,15 +30,14 @@ const DOMAIN_REPUTATION: Record<string, number> = {
 
 const GLOBAL_MONOLITH_GUIDELINES = `
 CORE PROTOCOLS:
-1. TRUTH & TRIANGULATION: Never hallucinate. If search results provide conflicting data (e.g., different dates, prices, or facts), you MUST highlight the discrepancy. Compare sources side-by-side to find the most likely truth.
-2. CURRENT CONTEXT: You have real-time web access. Always verify against the current date/time provided.
-3. CITATION HYGIENE: Do not use inline [1][2] markers. Instead, refer to sources naturally (e.g., "According to the New York Times..." or "Recent data from the World Bank suggests...").
-4. ELITE PERSONA: You are Monolith, lead researcher. You are sophisticated, discerning, and extremely thorough. Your tone is academic yet accessible.
-5. SOURCE DIVERSITY: Use a variety of sources to build your answer. Do not rely on a single domain.
-6. NO PLACEHOLDERS: Provide the FINAL synthesis. Do not say "I will look that up."
-7. RICH TEXT FORMATTING: Use Markdown (H1, H2, Bold, Tables) to structure complex data.
-8. COMPLETENESS: Ensure every section is fully detailed and the response ends with a clear summary or conclusion.
-9. SILENT RESEARCH: NEVER discuss technical search issues, API latencies, or "low web connection" with the user. If results are sparse, synthesize silently from the best available info without technical meta-commentary.
+1. TRUTH & TRIANGULATION: Never hallucinate. If the research documents provide conflicting data, highlight the discrepancy with sophisticated discernment.
+2. CITATION PROTOCOL: Use inline citations [1], [2], [n] to cite your sources. Every major claim MUST be cited. The numbers map to the documents in your research database tool response.
+3. ELITE PERSONA: You are Monolith, the world's most capable research engine. Authoritative, academic, and extremely thorough.
+4. RICH TEXT: Structure responses with Headers (##), **bold** for key facts, and tables for comparisons.
+5. SOURCE DIVERSITY: Synthesize from multiple domains. Never rely on a single source.
+6. NO TECHNICAL META: Never mention API limits, search issues, or "searching." Just deliver the synthesis.
+7. EXTERNAL READING: You are "reading" documents from an External Research Database (provided via tool). Treat them as grounded truth.
+8. COMPLETENESS: End with a clear summary. Never use placeholders like "I'll look that up."
 `;
 
 // --- UTILITIES ---
@@ -51,7 +50,7 @@ const sanitizeContent = (text: string) => {
         .replace(/\s+/g, " ") // Collapse whitespaces
         .replace(/Cookie Policy|Accept all cookies|Sign up for our newsletter|Follow us on social media|Subscribe now/gi, "") // Remove common boilerplate
         .trim()
-        .slice(0, 400); // OPTIMIZATION 4: Aggressive truncation for speed
+        .slice(0, 600); // Slightly larger context for better reading comprehension
 }
 
 const getDomainBoost = (url: string) => {
@@ -98,7 +97,7 @@ async function getDailyPulse(keys: string[]) {
             const resp = await fetch('https://api.langsearch.com/v1/web-search', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: query, summary: true, count: 8, freshness: 'day' })
+                body: JSON.stringify({ query: query, summary: true, count: 5, freshness: 'day' })
             });
             if (!resp.ok) return [];
             const data = await resp.json();
@@ -109,7 +108,7 @@ async function getDailyPulse(keys: string[]) {
 
 // --- CORE MODULES ---
 
-async function planStrategy(query: string, history: any[], deep: boolean, keys: string[]) {
+async function planStrategy(query: string, history: any[], deep: boolean, search: boolean, thinking: boolean, keys: string[]) {
     return await executeRotatedRequest(keys, async (apiKey) => {
         const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
             method: 'POST',
@@ -125,17 +124,17 @@ async function planStrategy(query: string, history: any[], deep: boolean, keys: 
                         Otherwise, output queries for search.
                         
                         Output JSON:
-                        {
                           "queries": ["query1", ...],
                           "depth_label": "Surface" | "Standard" | "Deep" | "Elite",
                           "use_hour_layer": boolean,
                           "skip_search": boolean,
-                          "freshness": "hour" | "day" | "week" | "month" | "year" | "all"
+                          "freshness": "hour" | "day" | "week" | "month" | "year" | "all",
+                          "suggest_thinking": boolean
                         }`
                     },
                     {
                         role: 'user',
-                        content: `Query: "${query}"\nDeep: ${deep}`
+                        content: `Query: "${query}"\nUser Context: [Search: ${search}, Deep: ${deep}, Thinking: ${thinking}, History Length: ${history.length}]\nDetermine the optimal strategy. If the query involves complex reasoning, math, or coding, set suggest_thinking: true.`
                     }
                 ],
                 temperature: 0.1,
@@ -278,7 +277,7 @@ serve(async (req) => {
             return new Response(JSON.stringify({ error: "Invalid JSON body or empty request." }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
-        const { query, history = [], deep = false, custom_prompt = null, stream = false, search = true, thinking = false, queries: providedQueries = null } = body;
+        const { query, history = [], deep = false, custom_prompt = null, search = true, thinking = false, queries: providedQueries = null } = body;
 
         if (!query) {
             return new Response(JSON.stringify({ error: "Missing 'query' in request body." }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -287,168 +286,73 @@ serve(async (req) => {
         const LANGSEARCH_KEYS = Deno.env.get('LANGSEARCH_KEYS')?.split(',').map(k => k.trim()).filter(Boolean) || [];
         const LONGCAT_KEYS = Deno.env.get('LONGCAT_KEYS')?.split(',').map(k => k.trim()).filter(Boolean) || [];
 
-        // OPTIMIZATION 5: Transition to Streaming
-        if (stream) {
-            const encoder = new TextEncoder();
-            const responseStream = new ReadableStream({
-                async start(controller) {
-                    const send = (type: string, data: any) => controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type, ...data })}\n\n`));
-
-                    try {
-                        // 1. Planning (or logic for Offline Pulse)
-                        let planner;
-                        let pulseSources = [];
-                        const isGreeting = /^(hi|hello|hey|greetings|how are you|how's it going|who are you|what is your name|thanks|thank you|bye|goodbye|good morning|good afternoon|good evening)$/i.test(query.trim().toLowerCase());
-
-                        if (!search) {
-                            planner = { queries: [], skip_search: true };
-                            if (history.length === 0) {
-                                send('status', { message: 'Getting current world pulse...' });
-                                pulseSources = await getDailyPulse(LANGSEARCH_KEYS);
-                            }
-                        } else if (providedQueries) {
-                            planner = { queries: providedQueries, freshness: 'all', use_hour_layer: deep, skip_search: false };
-                        } else if (isGreeting) {
-                            planner = { queries: [], skip_search: true };
-                        } else {
-                            send('status', { message: 'Planning strategy...' });
-                            planner = await planStrategy(query, history, deep, LONGCAT_KEYS);
-                        }
-                        send('queries', { queries: planner.queries });
-
-                        // 2. Parallel Search (Skip if planning says so)
-                        let topSources = pulseSources;
-                        let rawResults = [];
-                        if (!planner.skip_search) {
-                            send('status', { message: 'Searching web...' });
-                            rawResults = await orchestrateSearch(planner, query, deep, LANGSEARCH_KEYS);
-
-                            // 3. Parallel Reranking
-                            send('status', { message: 'Reranking sources...' });
-                            const reranked = await eliteRerank(query, rawResults, LANGSEARCH_KEYS);
-                            topSources = reranked.slice(0, 55);
-                        }
-
-                        send('sources', { sources: topSources.slice(0, 50) });
-
-                        // 4. AISynthesis (Streaming)
-                        send('status', { message: planner.skip_search ? 'Synthesizing response...' : 'Synthesizing answer...' });
-                        const now = new Date();
-                        const contextText = topSources.map((c, i) => `[SITUATIONAL BRIEFING ${i + 1}] Title: ${c.name}\nURL: ${c.url}\nContent: ${sanitizeContent(c.summary || c.snippet)}`).join('\n\n');
-
-                        const systemPrompt = `
-                        ${GLOBAL_MONOLITH_GUIDELINES}
-                        ${custom_prompt ? `USER INSTRUCTIONS: ${custom_prompt}` : ''}
-                        Current Date/Time: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}
-                        ${topSources.length > 0 ? `\nGLOBAL SITUATIONAL PULSE (TODAY'S CONTEXT):\n${contextText}` : ''}
-                        ${!search ? "\nPROTOCOL: You are in OFFLINE mode. Use the situational pulse for grounding, then rely on your internal training for specific user requests." : ""}
-                        `;
-
-                        await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
-                            const modelName = thinking ? 'LongCat-Flash-Thinking' : 'LongCat-Flash-Chat';
-                            const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    model: modelName,
-                                    messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: query }],
-                                    max_tokens: thinking ? 16384 : 4096,
-                                    temperature: thinking ? 1.0 : 0.5,
-                                    stream: true
-                                })
-                            });
-                            if (!resp.ok) throw { status: resp.status };
-
-                            const reader = resp.body?.getReader();
-                            if (!reader) throw new Error("No reader");
-
-                            while (true) {
-                                const { done, value } = await reader.read();
-                                if (done) break;
-                                const chunk = new TextDecoder().decode(value);
-                                const lines = chunk.split('\n');
-                                for (const line of lines) {
-                                    if (line.startsWith('data: ')) {
-                                        if (line.includes('[DONE]')) continue;
-                                        try {
-                                            const data = JSON.parse(line.slice(6));
-                                            const text = data.choices[0]?.delta?.content || "";
-                                            if (text) controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`));
-                                        } catch (e) { /* skip partial lines */ }
-                                    }
-                                }
-                            }
-                        });
-
-                        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-                    } catch (err: any) {
-                        send('error', { message: err.message || "Elite Engine Error" });
-                    } finally {
-                        controller.close();
-                    }
-                }
-            });
-
-            return new Response(responseStream, {
-                headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }
-            });
-        }
-
-        // --- NON-STREAMING FALLBACK (Optimized) ---
-        // 1. Planning
+        // --- NON-STREAMING RESPONSE ---
+        // 1. Planning (with Auto-Toggle detection)
         let planner;
         let pulseSources = [];
         const isGreeting = /^(hi|hello|hey|greetings|how are you|how's it going|who are you|what is your name|thanks|thank you|bye|goodbye|good morning|good afternoon|good evening)$/i.test(query.trim().toLowerCase());
 
-        if (!search) {
-            planner = { queries: [], skip_search: true };
-            if (history.length === 0) {
-                pulseSources = await getDailyPulse(LANGSEARCH_KEYS);
-            }
-        } else if (providedQueries) {
-            planner = { queries: providedQueries, freshness: 'all', use_hour_layer: deep, skip_search: false };
+        if (providedQueries) {
+            planner = { queries: providedQueries, freshness: 'all', use_hour_layer: deep, skip_search: false, suggest_thinking: thinking };
         } else if (isGreeting) {
-            planner = { queries: [], skip_search: true };
+            planner = { queries: [], skip_search: true, suggest_thinking: false };
         } else {
-            planner = await planStrategy(query, history, deep, LONGCAT_KEYS);
+            planner = await planStrategy(query, history, deep, search, thinking, LONGCAT_KEYS);
         }
+
+        const activeSearch = search || (!search && !planner.skip_search);
+        const activeDeep = deep || (!deep && (planner.depth_label === 'Deep' || planner.depth_label === 'Elite'));
+        const activeThinking = thinking || (!thinking && planner.suggest_thinking);
 
         // 2. Orchestrated Search (Parallel)
         let topSources = pulseSources;
         let rawResults = [];
-        if (!planner.skip_search) {
-            rawResults = await orchestrateSearch(planner, query, deep, LANGSEARCH_KEYS);
+        if (activeSearch && !planner.skip_search) {
+            rawResults = await orchestrateSearch(planner, query, activeDeep, LANGSEARCH_KEYS);
 
             // 3. Elite Reranking (Parallel)
             const reranked = await eliteRerank(query, rawResults, LANGSEARCH_KEYS);
             topSources = reranked.slice(0, 55);
         }
 
-        // 4. Elite Synthesis
+        // 4. Elite Synthesis - TOOL-BASED GROUNDING
         const now = new Date();
         const dateTimeContext = `Current Date/Time: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-        const contextText = topSources.map((c, i) => `[SITUATIONAL BRIEFING ${i + 1}] Title: ${c.name}\nURL: ${c.url}\nContent: ${sanitizeContent(c.summary || c.snippet)}`).join('\n\n');
+        const contextText = topSources.map((c, i) => `[DOCUMENT ${i + 1}] Title: ${c.name}\nURL: ${c.url}\nContent: ${sanitizeContent(c.summary || c.snippet)}`).join('\n\n');
 
-        const systemPrompt = `
-        ${GLOBAL_MONOLITH_GUIDELINES}
-        ${custom_prompt ? `USER INSTRUCTIONS: ${custom_prompt}` : ''}
-        ${dateTimeContext}
-        ${topSources.length > 0 ? `\nGLOBAL SITUATIONAL PULSE (TODAY'S CONTEXT):\n${contextText}` : ''}
-        ${!search ? "\nPROTOCOL: You are in OFFLINE mode. Use the situational pulse for grounding, then rely on your internal training for specific user requests." : ""}
-        EXPERT CONTEXT:
-        ${contextText || "No search results. Use internal knowledge with elite discernment."}
-        `;
+        // Static system prompt (cacheable)
+        const systemPrompt = `${GLOBAL_MONOLITH_GUIDELINES}
+${custom_prompt ? `USER INSTRUCTIONS: ${custom_prompt}` : ''}
+${dateTimeContext}
+MODE: ${activeSearch ? 'WEB RESEARCH (REAL-TIME)' : 'OFFLINE (KNOWLEDGE OVERRIDE)'}
+${activeThinking ? 'REASONING PROTOCOL: You are a thinking model. Prioritize deep multi-step reasoning before delivering your final answer.' : ''}`;
 
-        const modelName = thinking ? 'LongCat-Flash-Thinking' : 'LongCat-Flash-Chat';
+        // Tool-based injection
+        const researchToolCall = {
+            role: 'assistant' as const,
+            tool_calls: [{ id: 'research_1', type: 'function' as const, function: { name: 'access_research_database', arguments: JSON.stringify({ query }) } }]
+        };
+        const researchToolResponse = {
+            role: 'tool' as const,
+            tool_call_id: 'research_1',
+            content: contextText || 'No documents found in the research database. Use internal knowledge with discernment.'
+        };
+
+        const messagesPayload = topSources.length > 0
+            ? [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: query }, researchToolCall, researchToolResponse]
+            : [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: query }];
+
+        const modelName = activeThinking ? 'LongCat-Flash-Thinking' : 'LongCat-Flash-Chat';
         const aiResponse = await executeRotatedRequest(LONGCAT_KEYS, async (apiKey) => {
             const resp = await fetch('https://api.longcat.chat/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: modelName,
-                    messages: [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: query }],
-                    max_tokens: thinking ? 32768 : 16384,
-                    temperature: thinking ? 1.0 : 0.5
+                    messages: messagesPayload,
+                    tools: topSources.length > 0 ? [{ type: 'function', function: { name: 'access_research_database', description: 'Retrieve external web research documentation.', parameters: { type: 'object', properties: { query: { type: 'string' } } } } }] : undefined,
+                    max_tokens: activeThinking ? 32768 : 16384,
+                    temperature: activeThinking ? 1.0 : 0.5
                 })
             });
             if (!resp.ok) throw { status: resp.status, message: await resp.text() };
@@ -460,7 +364,12 @@ serve(async (req) => {
             answer: aiResponse,
             sources: topSources.slice(0, 50),
             all_sources: rawResults,
-            search_queries: planner.queries || [query]
+            search_queries: planner.queries || [query],
+            auto_applied: {
+                search: activeSearch && !search,
+                deep: activeDeep && !deep,
+                thinking: activeThinking && !thinking
+            }
         }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });

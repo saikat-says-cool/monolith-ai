@@ -1450,20 +1450,96 @@ body {
 }
 
 .sources-toggle-btn.active {
-  background: var(--accent);
-  color: #000;
+  background: var(--accent-dim);
   border-color: var(--accent);
+  color: var(--accent);
+  z-index: 1;
 }
 
 .relevance-badge {
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   padding: 2px 6px;
   background: var(--accent-dim);
   color: var(--accent);
-  border-radius: 100px;
-  font-weight: 600;
-  margin-left: auto;
+  border: 1px solid var(--accent-glow);
+  border-radius: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
+
+/* Voice & Stop Buttons */
+.search-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.mic-btn {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border-radius: 14px;
+  transition: var(--transition);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
+.mic-btn:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.mic-btn.recording {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: #ef4444;
+  animation: recording-glow 1.5s infinite;
+}
+
+@keyframes recording-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.search-stop {
+  width: 44px;
+  height: 44px;
+  background: var(--bg-panel);
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition);
+}
+
+.search-stop:hover {
+  background: #ef4444;
+  color: white;
+  transform: scale(1.05);
+}
+
+/* Adjust textarea for auto-height */
+.search-input {
+  overflow-y: hidden;
+  resize: none;
+}
+
 
 /* Source card improvements */
 .sidebar-card {
