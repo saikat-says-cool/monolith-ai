@@ -903,27 +903,59 @@ const App = () => {
         {/* Follow-up Bar */}
         {(activeThreadId || messages.length > 0) && (
           <div className="follow-up-bar">
-            <form onSubmit={handleSearch} className="search-wrapper">
-              <button
-                type="button"
-                className={`deep-research-btn ${isDeepResearch ? 'active' : ''}`}
-                onClick={() => setIsDeepResearch(!isDeepResearch)}
-                title="Deep Research Mode"
-              >
-                <Sparkles size={14} className="sparkle-icon" />
-                Deep Research
-              </button>
-              <input
-                type="text"
-                className="search-input"
-                placeholder="Ask a follow-up..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              <button type="submit" className="search-submit">
-                <ChevronRight size={24} />
-              </button>
-            </form>
+            <div className="search-container">
+              <form onSubmit={handleSearch} className="search-wrapper">
+                <div className="search-modes-row">
+                  <button
+                    type="button"
+                    className={`mode-toggle-btn ${isSearchActive ? 'active' : ''}`}
+                    onClick={() => {
+                      const next = !isSearchActive;
+                      setIsSearchActive(next);
+                      if (!next) setIsDeepResearch(false);
+                    }}
+                    title="Web Search"
+                  >
+                    <Globe size={14} />
+                    Search
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-toggle-btn ${isDeepResearch ? 'active' : ''}`}
+                    onClick={() => {
+                      const next = !isDeepResearch;
+                      setIsDeepResearch(next);
+                      if (next) setIsSearchActive(true);
+                    }}
+                    title="Deep Research Mode"
+                  >
+                    <Sparkles size={14} />
+                    Research
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-toggle-btn ${isThinkingMode ? 'active' : ''}`}
+                    onClick={() => setIsThinkingMode(!isThinkingMode)}
+                    title="Reasoning/Thinking Model"
+                  >
+                    <BrainCircuit size={14} />
+                    Thinking
+                  </button>
+                </div>
+                <div className="search-input-group">
+                  <input
+                    type="text"
+                    className="search-input"
+                    placeholder={!(isSearchActive || isDeepResearch) ? "Chat offline..." : "Ask a follow-up..."}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  <button type="submit" className="search-submit">
+                    <ChevronRight size={24} />
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </main>
