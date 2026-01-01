@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Home, Library, Settings, Sparkles, Share2, ChevronRight, Loader2, Globe, MessageSquare, Plus, Menu, Trash2, Edit2, Check, X, Moon, Sun, BookOpen, Layers, PlusCircle, MoreVertical } from 'lucide-react';
+import { Search, Home, Library, Settings, Sparkles, Share2, ChevronRight, Loader2, Globe, BrainCircuit, MessageSquare, Plus, Menu, Trash2, Edit2, Check, X, Moon, Sun, BookOpen, Layers, PlusCircle, MoreVertical } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
